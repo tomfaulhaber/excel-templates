@@ -93,9 +93,27 @@ Here is the code to create the workbook of squares discussed above:
 
 ### Limitations
 
+#### Formulas
+
+Excel templates does not parse and relocate formulas on your sheets. This means that if you have a formula and you replace a single row on your template sheet with multiple data rows, the resulting formulas are likely to be wrong.
+
+Due to limitations in POI's formula interpreter, some values of some formulas may not be updated correctly in output templates, but this should only be a problem with unusual functions.
+
 ### Compatibility
 
+To date, Excel templates have only been tested with Clojure 1.6 and Excel 2011, but I think they should work with all recent versions of Clojure and Excel or Libre Office. If you have an problem, feel free to open an issue on the github page and I'll take a look.
+
 ## Acknowledgments
+
+This library was created as part of a project for [Staples SparX][sparx] and they have graciously allowed me to open source it. If you're interested in a job creating great Clojure code, you should check them out.
+
+Excel templates are built on top of the [Apache POI][poi] library which does an excellent job of creating the missing API for Excel workbooks (and other Microsoft Office products).
+
+Christophe Grand's [enlive][enlive] library was the direct inspiration for this approach to doing templating using pure data and selectors. I wouldn't claim to have achieved the same degree of elegance as Christophe.
+
+[sparx]: http://www.staples-sparx.com
+[poi]: http://poi.apache.org
+[enlive]: https://github.com/cgrand/enlive
 
 ## License
 
