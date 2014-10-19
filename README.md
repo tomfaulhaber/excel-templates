@@ -101,7 +101,7 @@ Due to limitations in POI's formula interpreter, some values of some formulas ma
 
 ### Compatibility
 
-To date, Excel templates have only been tested with Clojure 1.6 and Excel 2011, but I think they should work with all recent versions of Clojure and Excel or Libre Office. If you have an problem, feel free to open an issue on the github page and I'll take a look.
+To date, Excel templates have only been tested with Clojure 1.6 and both Excel 2011 and Libre Office 4.1.3.2., but I think they should work with all recent versions of Clojure and Excel or Libre Office. If you have an problem, feel free to open an issue on the github page and I'll take a look.
 
 ## Acknowledgments
 
