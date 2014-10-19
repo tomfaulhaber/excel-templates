@@ -220,3 +220,13 @@ If there are any nil values in the source collection, the corresponding cells ar
       (finally
         (io/delete-file tmpfile)
         (io/delete-file tmpcopy)))))
+
+(defn render-document-to-stream!
+  "Build a report based on a spreadsheet template, write it to the output
+  stream."
+  [template-file output-stream replacements]
+  (let [temp-output-file (File/createTempFile "for-stream-output" ".xlsx")]
+    (try
+      (build-with-template template-file temp-output-file replacements)
+      (io/copy (io/input-stream temp-output-file) output-stream)
+      (finally (io/delete-file temp-output-file)))))
