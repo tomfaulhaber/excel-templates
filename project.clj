@@ -1,4 +1,4 @@
-(defproject com.infolace/excel-templates "0.1.0"
+(defproject com.infolace/excel-templates "0.2.0"
   :description "Build Excel files by combining a template with plain old data"
   :url "https://github.com/tomfaulhaber/excel-templates"
   :license {:name "Eclipse Public License"
