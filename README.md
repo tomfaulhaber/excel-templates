@@ -5,6 +5,47 @@ Excel templates is designed to build Excel spreadsheets by combining two parts:
 1. A Excel file that works as a template defining layout and formatting information for the spreadsheet you're creating
 2. A Clojure data in the form of maps and seqs that defines the contents to be inserted in the resulting spreadsheet.
 
+## Artifacts
+
+`excel-templates` artifacts are [released to Clojars](https://clojars.org/com.infolace/excel-templates).
+
+If you are using Maven, add the following repository definition to your `pom.xml`:
+
+``` xml
+<repository>
+  <id>clojars.org</id>
+  <url>http://clojars.org/repo</url>
+</repository>
+```
+
+### The Most Recent Release
+
+With Leiningen:
+
+``` clj
+[com.infolace/excel-templates "0.2.1"]
+```
+
+With Maven:
+
+``` xml
+<dependency>
+  <groupId>com.infolace</groupId>
+  <artifactId>excel-templates</artifactId>
+  <version>0.2.1</version>
+</dependency>
+```
+
+You should also have a dependency on a version of Clojure >= 1.6.0.
+
+## Including
+
+In your namespace declaration, you can require `excel-templates` like this:
+
+``` clj
+(:require [excel-templates.build :as excel])
+```
+
 ## Why Use Excel Templates?
 
 The spreadsheet is the preferred tool for data presentation and exploration for many users, especially in business.
@@ -83,13 +124,30 @@ Here is the code to create the workbook of squares discussed above:
 ```clojure
 (require '[excel-templates.build :as excel])
 
-(excel/build-with-template
+(excel/render-to-file
    "squares-template.xlsx"
    "squares.xslx"
    {"Squares" {3 [[1 1]
                  [2 4]
                  [3 9]]}})
 ```
+
+`render-to-stream` is also available for when you want to send the Excel data directly to an output stream. This is common when you are creating spreadsheets dynamically in a web server for instance.
+
+The equivalent to the above example for sending to a stream is:
+
+```clojure
+(require '[excel-templates.build :as excel])
+
+(excel/render-to-stream
+   "squares-template.xlsx"
+   output-stream
+   {"Squares" {3 [[1 1]
+                 [2 4]
+                 [3 9]]}})
+```
+
+Note that `render-to-stream` doesn't return until the entire spreadsheet has been sent to the output stream.
 
 ### Limitations
 
