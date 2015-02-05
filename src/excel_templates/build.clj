@@ -5,7 +5,9 @@
            [org.apache.poi.xssf.streaming SXSSFWorkbook]
            [org.apache.poi.xssf.usermodel XSSFWorkbook])
   (:require [clojure.java.io :as io]
-            [clojure.pprint :as pp]))
+            [clojure.pprint :as pp]
+            [clojure.set :as set]
+            [clojure.java.shell :as sh]))
 
 (defn indexed
   "For the collection coll with elements x0..xn, return a lazy sequence
@@ -157,6 +159,56 @@ If there are any nil values in the source collection, the corresponding cells ar
       (finally
         (io/delete-file tmpfile)))))
 
+(defn get-all-sheet-names
+  [wb]
+  (map #(.getSheetName wb %) (range (.getNumberOfSheets wb))))
+
+(defn save-workbook!
+  [workbook file]
+  (with-open [fos (FileOutputStream. file)]
+    (.write workbook fos)))
+
+(defn pad-sheet-rows!
+  "Make sure that the sheet has at least the rows it needs to handle the
+  incoming replacements."
+  [sheet replacements]
+  (let [row-nums (keys (replacements (.getSheetName sheet)))]
+    (doseq [row-num (range (inc (apply max row-nums)))]
+      (or (.getRow sheet row-num)
+          (.createRow sheet row-num)))))
+
+(defn create-missing-sheets!
+  "Add new sheets to the workbook, saves the file."
+  [excel-file replacements]
+  (let [temp-file (File/createTempFile "add-sheets" ".xlsx")
+        sheet-names (keys replacements)]
+    (try
+      (with-open [package (OPCPackage/open excel-file)]
+        (let [workbook (XSSFWorkbook. package)
+              all-sheet-names (get-all-sheet-names workbook)
+              sheet-name-strings (filter string? sheet-names)
+              sheet-name-numbers (filter number? sheet-names)]
+
+          ;; For sheets specified by name that aren't in the workbook, create
+          ;; sheets of the appropriate name.
+          (doseq [sheet (set/difference (set sheet-name-strings)
+                                        (set all-sheet-names))]
+            (pad-sheet-rows! (.createSheet workbook sheet) replacements))
+
+          ;; TODO If a sheet specified by number was greater than the number of
+          ;; sheets in the workbook, add sheets to fill that difference.
+          ;; TODO use when-let?
+          #_(when (seq (sheet-name-numbers))
+              (let [max-sheet-num (apply max sheet-name-numbers)
+                    sheets-to-add (- max-sheet-num (dec (.getNumberOfSheets workbook)))]
+                (doseq [sheet-index (range sheets-to-add)]
+                  (.createSheet workbook ("Sheet" sheet-index)))))
+
+          (save-workbook! workbook temp-file)))
+      (io/copy temp-file excel-file)
+      (finally
+        (io/delete-file temp-file)))))
+
 (defn render-to-file
   "Build a report based on a spreadsheet template"
   [template-file output-file replacements]
@@ -167,6 +219,7 @@ If there are any nil values in the source collection, the corresponding cells ar
       ;; though it's our input file. That's annoying from a source code
       ;; control perspective.
       (io/copy (get-template template-file) tmpcopy)
+      (create-missing-sheets! tmpcopy replacements)
       (build-base-output tmpcopy tmpfile)
       (let [replacements (if (-> replacements first val map?)
                            replacements
@@ -187,8 +240,7 @@ If there are any nil values in the source collection, the corresponding cells ar
                       wb (XSSFWorkbook. (.getPath (nth inputs sheet-num)))
                       wb (if src-has-formula? wb (SXSSFWorkbook. wb))]
                   (try
-                    (let [createHelper (.getCreationHelper wb)
-                          sheet (.getSheetAt wb sheet-num)]
+                    (let [sheet (.getSheetAt wb sheet-num)]
                       ;; loop through the rows of the template, copying
                       ;; from the template or injecting data rows as
                       ;; appropriate
@@ -212,11 +264,15 @@ If there are any nil values in the source collection, the corresponding cells ar
                     ;; Write the resulting output Workbook
                     (with-open [fos (FileOutputStream. (nth outputs sheet-num))]
                       (.write wb fos))
+                    (catch Exception e (.printStackTrace e))
                     (finally
                       (when-not has-formula?
                         (.dispose wb))))))
+
+              (catch Exception e (.printStackTrace e))
               (finally
                 (doseq [f intermediate-files] (io/delete-file f)))))))
+      (catch Exception e (.printStackTrace e))
       (finally
         (io/delete-file tmpfile)
         (io/delete-file tmpcopy)))))
@@ -230,3 +286,13 @@ If there are any nil values in the source collection, the corresponding cells ar
       (render-to-file template-file temp-output-file replacements)
       (io/copy (io/input-stream temp-output-file) output-stream)
       (finally (io/delete-file temp-output-file)))))
+
+;; This works, even though foo.xlsx only contains Sheet1, Sheet2.
+(comment (let [template-file "foo.xlsx"
+               output-file "/tmp/bar.xlsx"
+               data {"Sheet1" {2 [[nil "foo"]]}
+                     "Sheet2" {2 [[nil "bar"]]}
+                     "Sheet3" {2 [[nil "baz"]]}
+                     "Another Sheet" {5 [[nil "foozle doozle"]]}}]
+           (render-to-file template-file output-file data)
+           (sh "libreoffice" "--calc" output-file)))
