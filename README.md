@@ -5,6 +5,10 @@ Excel templates is designed to build Excel spreadsheets by combining two parts:
 1. A Excel file that works as a template defining layout and formatting information for the spreadsheet you're creating
 2. A Clojure data in the form of maps and seqs that defines the contents to be inserted in the resulting spreadsheet.
 
+I wrote a post on the [Infolace blog](http://www.infolace.com/blog/2015/02/10/generating-beautiful-excel-reports-with-templates/) about the motivation and construction of this project.
+
+There is also an [example project](https://github.com/tomfaulhaber/excel-templates-example) that shows how to use `excel-templates`.
+
 ## Artifacts
 
 `excel-templates` artifacts are [released to Clojars](https://clojars.org/com.infolace/excel-templates).
