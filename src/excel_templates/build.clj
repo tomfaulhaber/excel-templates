@@ -5,9 +5,10 @@
            [org.apache.poi.xssf.streaming SXSSFWorkbook]
            [org.apache.poi.xssf.usermodel XSSFWorkbook])
   (:require [clojure.java.io :as io]
+            [clojure.java.shell :as sh]
             [clojure.pprint :as pp]
             [clojure.set :as set]
-            [clojure.java.shell :as sh]))
+            [excel-templates.formulas :as fo]))
 
 (defn indexed
   "For the collection coll with elements x0..xn, return a lazy sequence
@@ -87,20 +88,23 @@
 
 (defn copy-row
   "Copy a single row of data from the template to the output, and the styles with them"
-  [wb src-row dst-row]
+  [translation-table wb sheet src-row dst-row]
   (when src-row
     (let [ncols (inc (.getLastCellNum src-row))]
      (doseq [cell-num (range ncols)]
        (when-let [src-cell (.getCell src-row cell-num Row/RETURN_BLANK_AS_NULL)]
-         (let [dst-cell (.createCell dst-row cell-num)]
+         (let [dst-cell (.createCell dst-row cell-num)
+               val (get-val src-cell)]
            (if (formula? src-cell)
-             (set-formula wb dst-cell (get-val src-cell))
-             (set-val wb dst-cell (get-val src-cell)))))))))
+             (let [target [(.getRowNum dst-row) cell-num]
+                   formula (fo/translate-formula translation-table wb sheet target val)]
+               (set-formula wb dst-cell formula))
+             (set-val wb dst-cell val))))))))
 
 (defn inject-data-row
   "Take the data from the collection data-row at set the cell values in the target row accordingly.
 If there are any nil values in the source collection, the corresponding cells are not modified."
-  [data-row wb src-row dst-row]
+  [data-row translation-table wb sheet src-row dst-row]
   (let [src-cols (inc (.getLastCellNum src-row))
         data-cols (count data-row)
         ncols (max src-cols data-cols)]
@@ -112,7 +116,9 @@ If there are any nil values in the source collection, the corresponding cells ar
           (let [dst-cell (or (.getCell dst-row cell-num)
                              (.createCell dst-row cell-num))]
             (if (and (not data-val) (formula? src-cell))
-              (set-formula wb dst-cell val)
+              (let [target [(.getRowNum dst-row) cell-num]
+                    formula (fo/translate-formula translation-table wb sheet target val)]
+                (set-formula wb dst-cell formula))
               (set-val wb dst-cell val))))))))
 
 (defn copy-styles
@@ -223,7 +229,8 @@ If there are any nil values in the source collection, the corresponding cells ar
       (build-base-output tmpcopy tmpfile)
       (let [replacements (if (-> replacements first val map?)
                            replacements
-                           {0 replacements})]
+                           {0 replacements})
+            translation-table (fo/build-translation-tables replacements)]
         (with-open [pkg (OPCPackage/open tmpcopy)]
           (let [template (XSSFWorkbook. pkg)
                 intermediate-files (for [index (range (dec (.getNumberOfSheets template)))]
@@ -252,13 +259,13 @@ If there are any nil values in the source collection, the corresponding cells ar
                               (do
                                 (doseq [[index data-row] (indexed data-rows)]
                                   (let [new-row (.createRow sheet (+ dst-row-num index))]
-                                    (inject-data-row data-row wb src-row new-row)
+                                    (inject-data-row data-row translation-table wb sheet src-row new-row)
                                     (copy-styles wb src-row new-row)))
                                 (recur (inc src-row-num) (+ dst-row-num (count data-rows))))
                               (do
                                 (when src-row
                                   (let [new-row (.createRow sheet dst-row-num)]
-                                    (copy-row wb src-row new-row)
+                                    (copy-row translation-table wb sheet src-row new-row)
                                     (copy-styles wb src-row new-row)))
                                 (recur (inc src-row-num) (inc dst-row-num))))))))
                     ;; Write the resulting output Workbook
