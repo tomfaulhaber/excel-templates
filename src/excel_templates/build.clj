@@ -8,6 +8,7 @@
             [clojure.java.shell :as sh]
             [clojure.pprint :as pp]
             [clojure.set :as set]
+            [excel-templates.charts :as c]
             [excel-templates.formulas :as fo]))
 
 (defn indexed
@@ -267,7 +268,8 @@ If there are any nil values in the source collection, the corresponding cells ar
                                   (let [new-row (.createRow sheet dst-row-num)]
                                     (copy-row translation-table wb sheet src-row new-row)
                                     (copy-styles wb src-row new-row)))
-                                (recur (inc src-row-num) (inc dst-row-num))))))))
+                                (recur (inc src-row-num) (inc dst-row-num)))))))
+                      (c/transform-charts sheet translation-table))
                     ;; Write the resulting output Workbook
                     (with-open [fos (FileOutputStream. (nth outputs sheet-num))]
                       (.write wb fos))

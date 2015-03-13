@@ -102,6 +102,21 @@
         (.setFirstRow first-row)
         (.setFirstColumn first-col)
         (.setLastRow last-row)
+        (.setLastColumn last-col))))
+  org.apache.poi.ss.formula.ptg.Area3DPtg
+  (translate-ptg [ptg translation-table sheet target-cell]
+    ;; TODO: same translation for both relative and absolute refs?
+    (let [ex-sheet (.getSheetAt (.getWorkbook sheet) (.getExternSheetIndex ptg))
+          first-src-row (.getFirstRow ptg)
+          first-src-col (.getFirstColumn ptg)
+          [first-row first-col] (src->dst translation-table ex-sheet [first-src-row first-src-col]  target-cell false)
+          last-src-row (.getLastRow ptg)
+          last-src-col (.getLastColumn ptg)
+          [last-row last-col] (src->dst translation-table ex-sheet [last-src-row last-src-col]  target-cell true)]
+      (doto ptg
+        (.setFirstRow first-row)
+        (.setFirstColumn first-col)
+        (.setLastRow last-row)
         (.setLastColumn last-col)))))
 
 (defn parse
