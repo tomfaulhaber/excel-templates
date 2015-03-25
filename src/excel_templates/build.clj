@@ -179,9 +179,7 @@ If there are any nil values in the source collection, the corresponding cells ar
 
 ;; TODO - this scenario can still be broken, for example if the first sheet
 ;; data doesn't have a sheet-name, but the second has the same sheet name
-;; as the template. May be better modeled as a reduction. Yeah, state can
-;; sort of be passed on that way... Or even a loop/recur. Yes, we should
-;; definitely do it that way, do it right.
+;; as the template. May be better modeled loop/recur, to maintain state.
 (defn add-sheet-names
   "For replacements that don't have an explicit sheet name, add a unique one."
   [replacements]
@@ -230,9 +228,8 @@ If there are any nil values in the source collection, the corresponding cells ar
   in the replacements."
   [excel-file replacements]
   (let [temp-file (File/createTempFile "add-sheets" ".xlsx")
-        name-pairs (-> replacements
-                       add-sheet-names
-                       ->template-name-sheet-name-pairs)]
+        name-pairs (->template-name-sheet-name-pairs
+                     (add-sheet-names replacements))]
     (try
       (with-open [package (OPCPackage/open excel-file)]
         (let [workbook (XSSFWorkbook. package)]
@@ -252,6 +249,20 @@ If there are any nil values in the source collection, the corresponding cells ar
       (finally
         (io/delete-file temp-file)))))
 
+(defn normalize-replacements
+  "Convert replacements to a one template per sheet data format.
+
+  {'Sheet1' [{..} {:sheet-name 'Sheet1-1' ...}]}
+
+  =>
+
+  {'Sheet1'   {...}
+   'Sheet1-1' {...}}"
+  [replacements]
+  (into {} (for [[template-name sheet-datas] replacements
+                 sheet-data sheet-datas]
+             [(:sheet-name sheet-data) (dissoc sheet-data :sheet-name)])))
+
 (defn render-to-file
   "Build a report based on a spreadsheet template"
   [template-file output-file replacements]
@@ -264,7 +275,8 @@ If there are any nil values in the source collection, the corresponding cells ar
       (io/copy (get-template template-file) tmpcopy)
       (create-missing-sheets! tmpcopy replacements)
       (build-base-output tmpcopy tmpfile)
-      (let [replacements (if (-> replacements first val map?)
+      (let [replacements (normalize-replacements (add-sheet-names replacements))
+            replacements (if (-> replacements first val map?)
                            replacements
                            {0 replacements})]
         (with-open [pkg (OPCPackage/open tmpcopy)]
@@ -277,7 +289,8 @@ If there are any nil values in the source collection, the corresponding cells ar
               (doseq [sheet-num (range (.getNumberOfSheets template))]
                 (let [src-sheet (.getSheetAt template sheet-num)
                       sheet-name (.getSheetName src-sheet)
-                      sheet-data (or (get replacements sheet-name) (get replacements sheet-num) {})
+                      sheet-data (or (get replacements sheet-name)
+                                     (get replacements sheet-num) {})
                       nrows (inc (.getLastRowNum src-sheet))
                       src-has-formula? (has-formula? src-sheet)
                       wb (XSSFWorkbook. (.getPath (nth inputs sheet-num)))
