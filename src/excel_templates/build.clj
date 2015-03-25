@@ -177,32 +177,67 @@ If there are any nil values in the source collection, the corresponding cells ar
       (or (.getRow sheet row-num)
           (.createRow sheet row-num)))))
 
+;; TODO - this scenario can still be broken, for example if the first sheet
+;; data doesn't have a sheet-name, but the second has the same sheet name
+;; as the template. May be better modeled as a reduction. Yeah, state can
+;; sort of be passed on that way... Or even a loop/recur. Yes, we should
+;; definitely do it that way, do it right.
+(defn add-sheet-names
+  "For replacements that don't have an explicit sheet name, add a unique one."
+  [replacements]
+  (into {} (for [[template-name sheet-data] foo]
+             [template-name
+              (map-indexed
+                (fn [i m] (if (:sheet-name m)
+                            m
+                            (assoc m :sheet-name (if (= i 0)
+                                                   template-name
+                                                   (str template-name "-" i)))))
+                sheet-data)])))
+
+(defn ->template-name-sheet-name-pairs
+  "Get pairs of template sheet name, destination sheet name from replacements."
+  [replacements]
+  (for [[template-name sheet-datas] replacements
+        sheet-data sheet-datas]
+      [template-name (:sheet-name sheet-data)]))
+
+(defn get-sheet-index
+  [workbook sheet-name]
+  (->> sheet-name
+       (.getSheet workbook)
+       (.getSheetIndex workbook)))
+
+(defn clone-sheet!
+  [workbook template-sheet-name dest-sheet-name]
+  (do (->> template-sheet-name
+           (get-sheet-index workbook)
+           (.cloneSheet workbook))
+
+      (->> (str template-sheet-name " (2)")
+           (get-sheet-index workbook)
+           (#(.setSheetName workbook % dest-sheet-name)))))
+
+;; TODO validate that only valid templates are named in replacements.
+;; use all-sheet-names and (keys replacementss)
+
 (defn create-missing-sheets!
+  ;; TODO update comment
   "Add new sheets to the workbook, saves the file."
   [excel-file replacements]
   (let [temp-file (File/createTempFile "add-sheets" ".xlsx")
-        sheet-names (keys replacements)]
+        name-pairs (-> replacements
+                       add-sheet-names
+                       ->template-name-sheet-name-pairs)]
     (try
       (with-open [package (OPCPackage/open excel-file)]
-        (let [workbook (XSSFWorkbook. package)
-              all-sheet-names (get-all-sheet-names workbook)
-              sheet-name-strings (filter string? sheet-names)
-              sheet-name-numbers (filter number? sheet-names)]
+        (let [workbook (XSSFWorkbook. package)]
 
-          ;; For sheets specified by name that aren't in the workbook, create
-          ;; sheets of the appropriate name.
-          (doseq [sheet (set/difference (set sheet-name-strings)
-                                        (set all-sheet-names))]
-            (pad-sheet-rows! (.createSheet workbook sheet) replacements))
+          (doseq [pair name-pairs]
+            (when (not= (first pair) (second pair))
+              (clone-sheet! workbook (first pair) (second pair))))
 
-          ;; TODO If a sheet specified by number was greater than the number of
-          ;; sheets in the workbook, add sheets to fill that difference.
-          ;; TODO use when-let?
-          #_(when (seq (sheet-name-numbers))
-              (let [max-sheet-num (apply max sheet-name-numbers)
-                    sheets-to-add (- max-sheet-num (dec (.getNumberOfSheets workbook)))]
-                (doseq [sheet-index (range sheets-to-add)]
-                  (.createSheet workbook ("Sheet" sheet-index)))))
+          ;; TODO - prune unused sheets by name.
 
           (save-workbook! workbook temp-file)))
       (io/copy temp-file excel-file)
@@ -287,12 +322,11 @@ If there are any nil values in the source collection, the corresponding cells ar
       (io/copy (io/input-stream temp-output-file) output-stream)
       (finally (io/delete-file temp-output-file)))))
 
-;; This works, even though foo.xlsx only contains Sheet1, Sheet2.
 (comment (let [template-file "foo.xlsx"
                output-file "/tmp/bar.xlsx"
-               data {"Sheet1" {2 [[nil "foo"]]}
-                     "Sheet2" {2 [[nil "bar"]]}
-                     "Sheet3" {2 [[nil "baz"]]}
-                     "Another Sheet" {5 [[nil "foozle doozle"]]}}]
+               data {"Sheet1" [{2 [[nil "foo"]]}
+                               {2 [[nil "bar"]] :sheet-name "Sheet1-a"}
+                               {2 [[nil "bar"]]}]
+                     "Sheet2" [{2 [[nil "bar"]]}]}]
            (render-to-file template-file output-file data)
            (sh "libreoffice" "--calc" output-file)))
