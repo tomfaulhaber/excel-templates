@@ -218,12 +218,16 @@ If there are any nil values in the source collection, the corresponding cells ar
            (get-sheet-index workbook)
            (#(.setSheetName workbook % dest-sheet-name)))))
 
+(defn remove-sheet!
+  [workbook sheet-name]
+  (.removeSheetAt workbook (get-sheet-index workbook sheet-name)))
+
 ;; TODO validate that only valid templates are named in replacements.
 ;; use all-sheet-names and (keys replacementss)
 
 (defn create-missing-sheets!
-  ;; TODO update comment
-  "Add new sheets to the workbook, saves the file."
+  "Updates the excel file with any missing sheets, referred to by :sheet-name
+  in the replacements."
   [excel-file replacements]
   (let [temp-file (File/createTempFile "add-sheets" ".xlsx")
         name-pairs (-> replacements
@@ -237,7 +241,11 @@ If there are any nil values in the source collection, the corresponding cells ar
             (when (not= (first pair) (second pair))
               (clone-sheet! workbook (first pair) (second pair))))
 
-          ;; TODO - prune unused sheets by name.
+          ;; Prune any of the original template sheets not needed.
+          (let [template-names (set (map first name-pairs))
+                sheet-names (set (map second name-pairs))]
+            (doseq [sheet-name (set/difference template-names sheet-names)]
+              (remove-sheet! workbook sheet-name)))
 
           (save-workbook! workbook temp-file)))
       (io/copy temp-file excel-file)
