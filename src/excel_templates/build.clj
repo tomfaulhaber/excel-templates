@@ -5,6 +5,7 @@
            [org.apache.poi.xssf.streaming SXSSFWorkbook]
            [org.apache.poi.xssf.usermodel XSSFWorkbook])
   (:require [clojure.java.io :as io]
+            [clojure.java.shell :as sh]
             [clojure.pprint :as pp]
             [clojure.set :as set]
             [clojure.java.shell :as sh]))
@@ -183,7 +184,7 @@ If there are any nil values in the source collection, the corresponding cells ar
 (defn add-sheet-names
   "For replacements that don't have an explicit sheet name, add a unique one."
   [replacements]
-  (into {} (for [[template-name sheet-data] foo]
+  (into {} (for [[template-name sheet-data] replacements]
              [template-name
               (map-indexed
                 (fn [i m] (if (:sheet-name m)
@@ -192,13 +193,6 @@ If there are any nil values in the source collection, the corresponding cells ar
                                                    template-name
                                                    (str template-name "-" i)))))
                 sheet-data)])))
-
-(defn ->template-name-sheet-name-pairs
-  "Get pairs of template sheet name, destination sheet name from replacements."
-  [replacements]
-  (for [[template-name sheet-datas] replacements
-        sheet-data sheet-datas]
-      [template-name (:sheet-name sheet-data)]))
 
 (defn get-sheet-index
   [workbook sheet-name]
@@ -228,8 +222,9 @@ If there are any nil values in the source collection, the corresponding cells ar
   in the replacements."
   [excel-file replacements]
   (let [temp-file (File/createTempFile "add-sheets" ".xlsx")
-        name-pairs (->template-name-sheet-name-pairs
-                     (add-sheet-names replacements))]
+        name-pairs (for [[template-name sheet-datas] replacements
+                         {:keys [sheet-name]} sheet-datas]
+                     [template-name sheet-name])]
     (try
       (with-open [package (OPCPackage/open excel-file)]
         (let [workbook (XSSFWorkbook. package)]
@@ -249,25 +244,39 @@ If there are any nil values in the source collection, the corresponding cells ar
       (finally
         (io/delete-file temp-file)))))
 
-(defn normalize-replacements
-  "Convert replacements to a one template per sheet data format.
+(defn replacements-by-sheet-name
+  "Convert replacements to a map of concrete sheet name -> sheet data map.
 
-  {'Sheet1' [{..} {:sheet-name 'Sheet1-1' ...}]}
+  {'Sheet1' [{:sheet-name 'Sheet1-1' ...} {:sheet-name 'Sheet1-2' ...}]}
 
   =>
 
-  {'Sheet1'   {...}
-   'Sheet1-1' {...}}"
+  {'Sheet1-1' {...}
+   'Sheet1-2' {...}}"
   [replacements]
   (into {} (for [[template-name sheet-datas] replacements
-                 sheet-data sheet-datas]
-             [(:sheet-name sheet-data) (dissoc sheet-data :sheet-name)])))
+                 {:keys [sheet-name] :as sheet-data} sheet-datas]
+             [sheet-name (dissoc sheet-data :sheet-name)])))
+
+(defn normalize
+  "Convert replacements to their verbose form.
+    * TODO allow single map of replacements to default sheet (0))
+    * make sheet-datas vectors
+    * add explicity :sheet-name to each sheet-data"
+  [replacements]
+  (->> replacements
+       ;; This method no longer works to support default sheet -- possibly use
+       ;; schema here.
+       #_(#(if (-> % first val map?) % {0 %}))
+       (map (juxt key (comp #(if (vector? %) % (vector %)) val)))
+       add-sheet-names))
 
 (defn render-to-file
   "Build a report based on a spreadsheet template"
   [template-file output-file replacements]
   (let [tmpfile (File/createTempFile "excel-output" ".xlsx")
-        tmpcopy (File/createTempFile "excel-template-copy" ".xlsx")]
+        tmpcopy (File/createTempFile "excel-template-copy" ".xlsx")
+        replacements (normalize replacements)]
     (try
       ;; We copy the template file because otherwise POI will modify it even
       ;; though it's our input file. That's annoying from a source code
@@ -275,10 +284,7 @@ If there are any nil values in the source collection, the corresponding cells ar
       (io/copy (get-template template-file) tmpcopy)
       (create-missing-sheets! tmpcopy replacements)
       (build-base-output tmpcopy tmpfile)
-      (let [replacements (normalize-replacements (add-sheet-names replacements))
-            replacements (if (-> replacements first val map?)
-                           replacements
-                           {0 replacements})]
+      (let [replacements (replacements-by-sheet-name replacements)]
         (with-open [pkg (OPCPackage/open tmpcopy)]
           (let [template (XSSFWorkbook. pkg)
                 intermediate-files (for [index (range (dec (.getNumberOfSheets template)))]
@@ -345,9 +351,16 @@ If there are any nil values in the source collection, the corresponding cells ar
 
 (comment (let [template-file "foo.xlsx"
                output-file "/tmp/bar.xlsx"
+
                data {"Sheet1" [{2 [[nil "foo"]]}
                                {2 [[nil "bar"]] :sheet-name "Sheet1-a"}
-                               {2 [[nil "bar"]]}]
-                     "Sheet2" [{2 [[nil "bar"]]}]}]
+                               {2 [[nil "baz"]] :sheet-name "Sheet1-b"}]
+                     "Sheet2" [{2 [[nil "qux"]]}]}]
+           (render-to-file template-file output-file data)
+           (sh "libreoffice" "--calc" output-file))
+
+         (let [template-file "foo.xlsx"
+               output-file "/tmp/bar.xlsx"
+               data {"Sheet1" {2 [[nil "old!"]]}}]
            (render-to-file template-file output-file data)
            (sh "libreoffice" "--calc" output-file)))
