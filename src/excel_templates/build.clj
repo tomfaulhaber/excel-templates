@@ -5,6 +5,7 @@
            [org.apache.poi.xssf.streaming SXSSFWorkbook]
            [org.apache.poi.xssf.usermodel XSSFWorkbook])
   (:require [clojure.java.io :as io]
+            [clojure.java.shell :as sh]
             [clojure.pprint :as pp]
             [clojure.set :as set]
             [clojure.java.shell :as sh]))
@@ -177,43 +178,105 @@ If there are any nil values in the source collection, the corresponding cells ar
       (or (.getRow sheet row-num)
           (.createRow sheet row-num)))))
 
+;; TODO - this scenario can still be broken, for example if the first sheet
+;; data doesn't have a sheet-name, but the second has the same sheet name
+;; as the template. May be better modeled loop/recur, to maintain state.
+(defn add-sheet-names
+  "For replacements that don't have an explicit sheet name, add a unique one."
+  [replacements]
+  (into {} (for [[template-name sheet-data] replacements]
+             [template-name
+              (map-indexed
+                (fn [i m] (if (:sheet-name m)
+                            m
+                            (assoc m :sheet-name (if (= i 0)
+                                                   template-name
+                                                   (str template-name "-" i)))))
+                sheet-data)])))
+
+(defn get-sheet-index
+  [workbook sheet-name]
+  (->> sheet-name
+       (.getSheet workbook)
+       (.getSheetIndex workbook)))
+
+(defn clone-sheet!
+  [workbook template-sheet-name dest-sheet-name]
+  (do (->> template-sheet-name
+           (get-sheet-index workbook)
+           (.cloneSheet workbook))
+
+      (->> (str template-sheet-name " (2)")
+           (get-sheet-index workbook)
+           (#(.setSheetName workbook % dest-sheet-name)))))
+
+(defn remove-sheet!
+  [workbook sheet-name]
+  (.removeSheetAt workbook (get-sheet-index workbook sheet-name)))
+
+;; TODO validate that only valid templates are named in replacements.
+;; use all-sheet-names and (keys replacementss)
+
 (defn create-missing-sheets!
-  "Add new sheets to the workbook, saves the file."
+  "Updates the excel file with any missing sheets, referred to by :sheet-name
+  in the replacements."
   [excel-file replacements]
   (let [temp-file (File/createTempFile "add-sheets" ".xlsx")
-        sheet-names (keys replacements)]
+        name-pairs (for [[template-name sheet-datas] replacements
+                         {:keys [sheet-name]} sheet-datas]
+                     [template-name sheet-name])]
     (try
       (with-open [package (OPCPackage/open excel-file)]
-        (let [workbook (XSSFWorkbook. package)
-              all-sheet-names (get-all-sheet-names workbook)
-              sheet-name-strings (filter string? sheet-names)
-              sheet-name-numbers (filter number? sheet-names)]
+        (let [workbook (XSSFWorkbook. package)]
 
-          ;; For sheets specified by name that aren't in the workbook, create
-          ;; sheets of the appropriate name.
-          (doseq [sheet (set/difference (set sheet-name-strings)
-                                        (set all-sheet-names))]
-            (pad-sheet-rows! (.createSheet workbook sheet) replacements))
+          (doseq [pair name-pairs]
+            (when (not= (first pair) (second pair))
+              (clone-sheet! workbook (first pair) (second pair))))
 
-          ;; TODO If a sheet specified by number was greater than the number of
-          ;; sheets in the workbook, add sheets to fill that difference.
-          ;; TODO use when-let?
-          #_(when (seq (sheet-name-numbers))
-              (let [max-sheet-num (apply max sheet-name-numbers)
-                    sheets-to-add (- max-sheet-num (dec (.getNumberOfSheets workbook)))]
-                (doseq [sheet-index (range sheets-to-add)]
-                  (.createSheet workbook ("Sheet" sheet-index)))))
+          ;; Prune any of the original template sheets not needed.
+          (let [template-names (set (map first name-pairs))
+                sheet-names (set (map second name-pairs))]
+            (doseq [sheet-name (set/difference template-names sheet-names)]
+              (remove-sheet! workbook sheet-name)))
 
           (save-workbook! workbook temp-file)))
       (io/copy temp-file excel-file)
       (finally
         (io/delete-file temp-file)))))
 
+(defn replacements-by-sheet-name
+  "Convert replacements to a map of concrete sheet name -> sheet data map.
+
+  {'Sheet1' [{:sheet-name 'Sheet1-1' ...} {:sheet-name 'Sheet1-2' ...}]}
+
+  =>
+
+  {'Sheet1-1' {...}
+   'Sheet1-2' {...}}"
+  [replacements]
+  (into {} (for [[template-name sheet-datas] replacements
+                 {:keys [sheet-name] :as sheet-data} sheet-datas]
+             [sheet-name (dissoc sheet-data :sheet-name)])))
+
+(defn normalize
+  "Convert replacements to their verbose form.
+    * TODO allow single map of replacements to default sheet (0))
+    * make sheet-datas vectors
+    * add explicity :sheet-name to each sheet-data"
+  [replacements]
+  (->> replacements
+       ;; This method no longer works to support default sheet -- possibly use
+       ;; schema here.
+       #_(#(if (-> % first val map?) % {0 %}))
+       (map (juxt key (comp #(if (vector? %) % (vector %)) val)))
+       add-sheet-names))
+
 (defn render-to-file
   "Build a report based on a spreadsheet template"
   [template-file output-file replacements]
   (let [tmpfile (File/createTempFile "excel-output" ".xlsx")
-        tmpcopy (File/createTempFile "excel-template-copy" ".xlsx")]
+        tmpcopy (File/createTempFile "excel-template-copy" ".xlsx")
+        replacements (normalize replacements)]
     (try
       ;; We copy the template file because otherwise POI will modify it even
       ;; though it's our input file. That's annoying from a source code
@@ -221,9 +284,7 @@ If there are any nil values in the source collection, the corresponding cells ar
       (io/copy (get-template template-file) tmpcopy)
       (create-missing-sheets! tmpcopy replacements)
       (build-base-output tmpcopy tmpfile)
-      (let [replacements (if (-> replacements first val map?)
-                           replacements
-                           {0 replacements})]
+      (let [replacements (replacements-by-sheet-name replacements)]
         (with-open [pkg (OPCPackage/open tmpcopy)]
           (let [template (XSSFWorkbook. pkg)
                 intermediate-files (for [index (range (dec (.getNumberOfSheets template)))]
@@ -234,7 +295,8 @@ If there are any nil values in the source collection, the corresponding cells ar
               (doseq [sheet-num (range (.getNumberOfSheets template))]
                 (let [src-sheet (.getSheetAt template sheet-num)
                       sheet-name (.getSheetName src-sheet)
-                      sheet-data (or (get replacements sheet-name) (get replacements sheet-num) {})
+                      sheet-data (or (get replacements sheet-name)
+                                     (get replacements sheet-num) {})
                       nrows (inc (.getLastRowNum src-sheet))
                       src-has-formula? (has-formula? src-sheet)
                       wb (XSSFWorkbook. (.getPath (nth inputs sheet-num)))
@@ -287,12 +349,18 @@ If there are any nil values in the source collection, the corresponding cells ar
       (io/copy (io/input-stream temp-output-file) output-stream)
       (finally (io/delete-file temp-output-file)))))
 
-;; This works, even though foo.xlsx only contains Sheet1, Sheet2.
 (comment (let [template-file "foo.xlsx"
                output-file "/tmp/bar.xlsx"
-               data {"Sheet1" {2 [[nil "foo"]]}
-                     "Sheet2" {2 [[nil "bar"]]}
-                     "Sheet3" {2 [[nil "baz"]]}
-                     "Another Sheet" {5 [[nil "foozle doozle"]]}}]
+
+               data {"Sheet1" [{2 [[nil "foo"]]}
+                               {2 [[nil "bar"]] :sheet-name "Sheet1-a"}
+                               {2 [[nil "baz"]] :sheet-name "Sheet1-b"}]
+                     "Sheet2" [{2 [[nil "qux"]]}]}]
+           (render-to-file template-file output-file data)
+           (sh "libreoffice" "--calc" output-file))
+
+         (let [template-file "foo.xlsx"
+               output-file "/tmp/bar.xlsx"
+               data {"Sheet1" {2 [[nil "old!"]]}}]
            (render-to-file template-file output-file data)
            (sh "libreoffice" "--calc" output-file)))
