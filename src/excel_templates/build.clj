@@ -274,7 +274,7 @@ If there are any nil values in the source collection, the corresponding cells ar
        ;; This method no longer works to support default sheet -- possibly use
        ;; schema here.
        #_(#(if (-> % first val map?) % {0 %}))
-       (map (juxt key (comp #(if (vector? %) % (vector %)) val)))
+       (map (juxt key (comp #(if (map? %) (vector %) %) val)))
        add-sheet-names))
 
 (defn render-to-file
