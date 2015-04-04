@@ -207,23 +207,63 @@ If there are any nil values in the source collection, the corresponding cells ar
        (.getSheetIndex workbook)))
 
 (defn clone-sheet!
-  [workbook template-sheet-name dest-sheet-name]
-  (do (->> template-sheet-name
-           (get-sheet-index workbook)
-           (.cloneSheet workbook))
+  [workbook template-sheet-name dest-sheet-name target-loc]
+  (->> template-sheet-name
+       (get-sheet-index workbook)
+       (.cloneSheet workbook))
 
-      (->> (str template-sheet-name " (2)")
-           (get-sheet-index workbook)
-           (#(.setSheetName workbook % dest-sheet-name)))))
+  (->> (str template-sheet-name " (2)")
+       (get-sheet-index workbook)
+       (#(.setSheetName workbook % dest-sheet-name)))
+
+  (.setSheetOrder workbook dest-sheet-name target-loc))
 
 (defn remove-sheet!
   [workbook sheet-name]
   (.removeSheetAt workbook (get-sheet-index workbook sheet-name)))
 
+(defn get-sheets
+  "Get all the sheet names in a workbook in the order they appear"
+  [wb]
+  (for [index (range (.getNumberOfSheets wb))]
+    (.getSheetName wb index)))
+
 ;; TODO validate that only valid templates are named in replacements.
-;; use all-sheet-names and (keys replacementss)
+;; use all-sheet-names and (keys replacements)
 
 (defn create-missing-sheets!
+  "Updates the excel file with any missing sheets, referred to by :sheet-name
+  in the replacements."
+  [excel-file replacements]
+  (let [temp-file (File/createTempFile "add-sheets" ".xlsx")]
+    (try
+      (with-open [package (OPCPackage/open excel-file)]
+        (let [workbook (XSSFWorkbook. package)]
+          (loop [src-index 0
+                 src-sheets (get-sheets wb)
+                 dst-index 0]
+            (when src-sheets
+              (let [[src-sheet & src-sheets] src-sheets]
+                (if-let [dst-sheets (map :sheet-name (replacements src-sheet))]
+                  (let [self-offset (.indexOf dst-sheets src-sheet)
+                        replace-self? (>= self-offset 0)]
+                    (doseq [[dst-offset dst-sheet] (map-indexed vector dst-sheets)
+                            :let [target-loc (+ dst-index dst-offset
+                                                (if (and replace-self? (< self-offset dst-offset))
+                                                  0 1))]]
+                      (when (not= src-sheet dst-sheet)
+                        (clone-sheet! workbook src-sheet dst-sheet target-loc)))
+                    (when-not replace-self?
+                      (remove-sheet! workbook src-sheet))
+                    (recur (inc src-index) src-sheets (+ dst-index (count dst-sheets))))
+                  (recur (inc src-index) src-sheets (inc dst-index))))))
+
+          (save-workbook! workbook temp-file)))
+      (io/copy temp-file excel-file)
+      (finally
+        (io/delete-file temp-file)))))
+
+(defn create-missing-sheets!-old
   "Updates the excel file with any missing sheets, referred to by :sheet-name
   in the replacements."
   [excel-file replacements]
