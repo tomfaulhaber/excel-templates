@@ -119,6 +119,25 @@
         (.setLastRow last-row)
         (.setLastColumn last-col)))))
 
+(defprotocol PtgRelocator
+  "Protocol to handle translating various PTG classes by modifying cell references appropriately"
+  (relocate-ptg [ptg old-index new-index]))
+
+(extend-protocol PtgRelocator
+  org.apache.poi.ss.formula.ptg.Ptg
+  (relocate-ptg [ptg old-index new-index]
+    ptg)
+
+  org.apache.poi.ss.formula.ptg.Area3DPtg
+  (relocate-ptg [ptg old-index new-index]
+    (when (= old-index (.getExternSheetIndex ptg))
+      (.setExternSheetIndex ptg)))
+
+  org.apache.poi.ss.formula.ptg.Ref3DPtg
+  (relocate-ptg [ptg old-index new-index]
+    (when (= old-index (.getExternSheetIndex ptg))
+      (.setExternSheetIndex ptg))))
+
 (defn parse
   "Parse a formula into a PTG array"
   [workbook sheet-num formula-string]
@@ -137,4 +156,12 @@
   (let [ptgs (parse workbook (sheet-number sheet) formula)]
     (doseq [ptg ptgs]
       (translate-ptg ptg translation-table sheet target-cell))
+    (render workbook ptgs)))
+
+(defn relocate-formula
+  "Relocate any references to the sheet at old-index in the formula to refer to new-index"
+  [workbook sheet old-index new-index formula]
+  (let [ptgs (parse workbook (sheet-number sheet) formula)]
+    (doseq [ptg ptgs]
+      (relocate-ptg ptg old-index new-index))
     (render workbook ptgs)))

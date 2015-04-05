@@ -252,7 +252,9 @@ If there are any nil values in the source collection, the corresponding cells ar
                                                 (if (and replace-self? (< self-offset dst-offset))
                                                   0 1))]]
                       (when (not= src-sheet dst-sheet)
-                        (clone-sheet! workbook src-sheet dst-sheet target-loc)))
+                        (clone-sheet! workbook src-sheet dst-sheet target-loc)
+                        ;(c/change-sheet (.getSheet workbook dst-sheet) src-index target-loc)
+                        ))
                     (when-not replace-self?
                       (remove-sheet! workbook src-sheet))
                     (recur (inc src-index) src-sheets (+ dst-index (count dst-sheets))))
@@ -260,6 +262,7 @@ If there are any nil values in the source collection, the corresponding cells ar
 
           (save-workbook! workbook temp-file)))
       (io/copy temp-file excel-file)
+      ; (io/copy temp-file (io/file "/tmp/debug.xlsx"))
       (finally
         (io/delete-file temp-file)))))
 
