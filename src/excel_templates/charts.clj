@@ -93,7 +93,7 @@
   ;; (println (str "Transforming sheet " (.getSheetName sheet) "(" (-> sheet .getWorkbook (.getSheetIndex sheet)) ")"))
   ;; (println (str "relations = " (-> sheet .createDrawingPatriarch .getRelations)))
   (doseq [chart (get-charts sheet)]
-    (println "xform chart")
+    ;; (println "xform chart")
     (->> chart get-xml (chart-transform sheet translation-table) (set-xml chart))))
 
 
