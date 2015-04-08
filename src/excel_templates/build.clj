@@ -84,6 +84,9 @@
 (defn set-formula
   "Set the formula for the given cell"
   [wb cell formula]
+  (fo/debug-println
+   (str "Set formula: (" (.getRowIndex cell) ", " (.getColumnIndex cell)
+        "): " formula) )
   (.setCellFormula cell formula)
   (-> wb .getCreationHelper .createFormulaEvaluator (.evaluateFormulaCell cell)))
 
@@ -320,6 +323,30 @@ If there are any nil values in the source collection, the corresponding cells ar
        (map (juxt key (comp #(if (map? %) (vector %) %) val)))
        add-sheet-names))
 
+(defn zip
+  "mix together two seqs like (zip [a b c] [x y z]) => [[a x] [b y] [c z]]"
+  [s1 s2]
+  (map (fn [x1 x2] [x1 x2]) s1 s2))
+
+(defn expand-replacements
+  "Expand any keys of the form [start end] in the replacement map to being individual row
+   keys"
+  [replacements]
+  (fo/map-values
+   (fn [v]
+     (into
+      {}
+      (mapcat (fn [[rows repls :as entry]]
+                (if (coll? rows)
+                  (let [[start end] rows
+                        span (- end start -1)
+                        repls (concat repls (repeat (- span (count repls)) nil))]
+                    (concat (zip (range start end) (map vector repls))
+                            [[end (drop (dec span) repls)]]))
+                  [entry]))
+              v)))
+   replacements))
+
 (defn render-to-file
   "Build a report based on a spreadsheet template"
   [template-file output-file replacements]
@@ -334,7 +361,8 @@ If there are any nil values in the source collection, the corresponding cells ar
       (create-missing-sheets! tmpcopy replacements)
       (build-base-output tmpcopy tmpfile)
       (let [replacements (replacements-by-sheet-name replacements)
-            translation-table (fo/build-translation-tables replacements)]
+            translation-table (fo/build-translation-tables replacements)
+            replacements (expand-replacements replacements)]
         (with-open [pkg (OPCPackage/open tmpcopy)]
           (let [template (XSSFWorkbook. pkg)
                 intermediate-files (for [index (range (dec (.getNumberOfSheets template)))]
