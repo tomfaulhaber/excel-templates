@@ -20,6 +20,11 @@
   [sheet]
   (-> sheet .createDrawingPatriarch .getCharts))
 
+(defn has-chart?
+  "Return true if the sheet has any charts on it"
+  [sheet]
+  (pos? (count (get-charts sheet))))
+
 (defn get-xml
   "Get the XML representation of a chart"
   [chart]

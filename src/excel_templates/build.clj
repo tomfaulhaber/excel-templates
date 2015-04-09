@@ -376,7 +376,8 @@ If there are any nil values in the source collection, the corresponding cells ar
                       sheet-data (or (get replacements sheet-name)
                                      (get replacements sheet-num) {})
                       nrows (inc (.getLastRowNum src-sheet))
-                      src-has-formula? (has-formula? src-sheet)
+                      src-has-formula? (or (has-formula? src-sheet)
+                                           (c/has-chart? src-sheet))
                       wb (XSSFWorkbook. (.getPath (nth inputs sheet-num)))
                       wb (if src-has-formula? wb (SXSSFWorkbook. wb))]
                   (try
@@ -407,7 +408,7 @@ If there are any nil values in the source collection, the corresponding cells ar
                       (.write wb fos))
                     (catch Exception e (.printStackTrace e))
                     (finally
-                      (when-not has-formula?
+                      (when-not src-has-formula?
                         (.dispose wb))))))
 
               (catch Exception e (.printStackTrace e))
