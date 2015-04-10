@@ -269,33 +269,6 @@ If there are any nil values in the source collection, the corresponding cells ar
       (finally
         (io/delete-file temp-file)))))
 
-(defn create-missing-sheets!-old
-  "Updates the excel file with any missing sheets, referred to by :sheet-name
-  in the replacements."
-  [excel-file replacements]
-  (let [temp-file (File/createTempFile "add-sheets" ".xlsx")
-        name-pairs (for [[template-name sheet-datas] replacements
-                         {:keys [sheet-name]} sheet-datas]
-                     [template-name sheet-name])]
-    (try
-      (with-open [package (OPCPackage/open excel-file)]
-        (let [workbook (XSSFWorkbook. package)]
-
-          (doseq [pair name-pairs]
-            (when (not= (first pair) (second pair))
-              (clone-sheet! workbook (first pair) (second pair))))
-
-          ;; Prune any of the original template sheets not needed.
-          (let [template-names (set (map first name-pairs))
-                sheet-names (set (map second name-pairs))]
-            (doseq [sheet-name (set/difference template-names sheet-names)]
-              (remove-sheet! workbook sheet-name)))
-
-          (save-workbook! workbook temp-file)))
-      (io/copy temp-file excel-file)
-      (finally
-        (io/delete-file temp-file)))))
-
 (defn replacements-by-sheet-name
   "Convert replacements to a map of concrete sheet name -> sheet data map.
 
