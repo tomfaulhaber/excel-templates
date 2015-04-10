@@ -243,7 +243,7 @@ If there are any nil values in the source collection, the corresponding cells ar
       (with-open [package (OPCPackage/open excel-file)]
         (let [workbook (XSSFWorkbook. package)]
           (loop [src-index 0
-                 src-sheets (get-sheets wb)
+                 src-sheets (get-sheets workbook)
                  dst-index 0]
             (when src-sheets
               (let [[src-sheet & src-sheets] src-sheets]
