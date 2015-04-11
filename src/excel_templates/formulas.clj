@@ -177,12 +177,29 @@
   org.apache.poi.ss.formula.ptg.Area3DPtg
   (relocate-ptg [ptg old-index new-index]
     (when (= old-index (.getExternSheetIndex ptg))
-      (.setExternSheetIndex ptg)))
+      (.setExternSheetIndex ptg new-index)))
 
   org.apache.poi.ss.formula.ptg.Ref3DPtg
   (relocate-ptg [ptg old-index new-index]
     (when (= old-index (.getExternSheetIndex ptg))
-      (.setExternSheetIndex ptg))))
+      (.setExternSheetIndex ptg new-index))))
+
+(defprotocol PtgExternalSheets
+  "Protocol to find any external sheet references in the formula and return them"
+  (external-sheets-ptg [ptg]))
+
+(extend-protocol PtgExternalSheets
+  org.apache.poi.ss.formula.ptg.Ptg
+  (external-sheets-ptg [ptg]
+    nil)
+
+  org.apache.poi.ss.formula.ptg.Area3DPtg
+  (external-sheets-ptg [ptg]
+    [(.getExternSheetIndex ptg)])
+
+  org.apache.poi.ss.formula.ptg.Ref3DPtg
+  (external-sheets-ptg [ptg]
+    [(.getExternSheetIndex ptg)]))
 
 (defn parse
   "Parse a formula into a PTG array"
@@ -211,3 +228,11 @@
     (doseq [ptg ptgs]
       (relocate-ptg ptg old-index new-index))
     (render workbook ptgs)))
+
+(defn external-sheets
+  "Find any references to external sheets in the formula (note: all referenced sheets need
+   to actually exist)."
+  [workbook sheet formula]
+  (let [ptgs (parse workbook (sheet-number sheet) formula)]
+    (set (map #(->> % (.getSheetAt workbook) .getSheetName)
+              (mapcat external-sheets-ptg ptgs)))))

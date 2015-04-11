@@ -1,6 +1,8 @@
 (ns excel-templates.charts
   (:import [org.openxmlformats.schemas.drawingml.x2006.chart CTChart$Factory])
   (:require [clojure.data.zip :as zf]
+            [clojure.data.zip.xml :as zx]
+            [clojure.set :as set]
             [clojure.string :as str]
             [clojure.xml :as xml]
             [clojure.zip :as zip]
@@ -62,26 +64,40 @@
 ;;; tree-edit is based on a blog post by Ravi Kotecha at
 ;;; http://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/
 
-(defn tree-edit
-  "Take a zipper, a function that matches a pattern in the tree,
-   and a function that edits the current location in the tree.  Examine the tree
-   nodes in depth-first order, determine whether the matcher matches, and if so
-   apply the editor."
+(defn tree-loc-edit
+  "The rawer version of tree edit, this operates on a loc rather than a node.
+   As a result, it allows for non-local manipulation of the tree."
   [zipper matcher editor]
   (loop [loc zipper]
     (if (zip/end? loc)
       loc
       (if (matcher loc)
-        (let [new-loc (zip/edit loc editor)]
+        (let [new-loc (editor loc)]
           (recur (zip/next new-loc)))
         (recur (zip/next loc))))))
+
+(defn tree-edit
+  "Take a zipper, a function that matches a pattern in the tree,
+  and a function that edits the current location in the tree.  Examine the tree
+  nodes in depth-first order, determine whether the matcher matches, and if so
+  apply the editor."
+  [zipper matcher editor]
+  (tree-loc-edit zipper matcher #(zip/edit % editor)))
+
+(defn formula?
+  "Return true if the node at the loc is a formula"
+  [loc]
+  (= :c:f (-> loc zip/node :tag)))
+
+(defn series?
+  "Return true if the node at the loc is a series"
+  [loc]
+  (= :c:ser (-> loc zip/node :tag)))
 
 (defn transform-xml
   "Transform the zipper representing the chart into a zipper with expansions"
   [sheet translation-table loc]
-  (letfn [(formula? [loc]
-            (= :c:f (-> loc zip/node :tag)))
-          (editor [node]
+  (letfn [(editor [node]
             (assoc node
               :content [(->> node :content first (transform-formula sheet translation-table))]))]
     (tree-edit loc formula? editor)))
@@ -101,6 +117,53 @@
     ;; (println "xform chart")
     (->> chart get-xml (chart-transform sheet translation-table) (set-xml chart))))
 
+(defn relocate-formula
+  "Relocate a single chart formula from old-sheet to new-sheet"
+  [sheet old-index new-index formula]
+  (fo/relocate-formula (.getWorkbook sheet) sheet old-index new-index formula))
+
+(defn relocate-xml
+  "Find the formulas in the XML that refer to the sheet at old-index and make them point to the sheet at new-index"
+  [sheet old-index new-index loc]
+  (letfn [(editor [node]
+            (assoc node
+              :content [(->> node :content first (relocate-formula sheet old-index new-index))]))]
+    (tree-edit loc formula? editor)))
+
+(defn expand-series
+  "Expand a single series into 0 or more destination series leaving the cursor such that zip/next
+   will return the same result as when called."
+  [sheet src-sheet dst-sheets series-loc]
+  (let [series-formulas (mapcat :content (zx/xml-> series-loc zf/descendants (zx/tag= :c:f) zip/node))
+        sheet-refs (reduce
+                    set/union
+                    (map
+                     (partial fo/external-sheets (.getWorkbook sheet) sheet)
+                     series-formulas))
+        wb (.getWorkbook sheet)
+        src-index (.getSheetIndex wb src-sheet)]
+    (if (sheet-refs src-sheet)
+      (let [series-xml (-> series-loc zip/node zip/xml-zip)
+            base-loc (zip/remove series-loc)]
+        (letfn [(add-series [loc dst-sheet]
+                  (let [dst-index (.getSheetIndex wb dst-sheet)
+                        new-xml (zip/node (relocate-xml sheet src-index dst-index series-xml))]
+                    (zip/right (zip/insert-right loc new-xml))))]
+          (reduce add-series base-loc dst-sheets)))
+      series-loc)))
+
+(defn expand-all-series
+  "Replicate the various series"
+  [sheet src-sheet dst-sheets chart-xml]
+  (tree-loc-edit chart-xml series? (partial expand-series sheet src-sheet dst-sheets)))
+
+(defn px [x] (println "px:" x) x)
+(defn expand-charts
+  "Replace any series in charts on the sheet that reference src-sheet with multiple series
+   each referencing a single element of dst-sheets"
+  [sheet src-sheet dst-sheets]
+  (doseq [chart (get-charts sheet)]
+    (->> chart get-xml parse-xml (expand-all-series sheet src-sheet dst-sheets) emit-xml px (set-xml chart))))
 
 ;;; NOTE: Everything below here is for relocating charts when sheets are
 ;;; cloned, but we're not using this right now because POI has some
@@ -112,20 +175,6 @@
 ;;; where they were pointing to the base sheet
 
 
-(defn relocate-formula
-  "Relocate a single chart formula from old-sheet to new-sheet"
-  [sheet old-index new-index formula]
-  (fo/relocate-formula (.getWorkbook sheet) sheet old-index new-index))
-
-(defn relocate-xml
-  "Find the formulas in the XML that refer to the sheet at old-index and make them point to the sheet at new-index"
-  [sheet old-index new-index loc]
-  (letfn [(formula? [loc]
-            (= :c:f (-> loc zip/node :tag)))
-          (editor [node]
-            (assoc node
-              :content [(->> node :content first (relocate-formula sheet old-index new-index))]))]
-    (tree-edit loc formula? editor)))
 
 (defn chart-change-sheet
   "Handle a single chart that was duplicated from an old sheet to a new sheet"
@@ -181,3 +230,12 @@
                    (.getCol to)      (.getRow to))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; When a chart refers to a series on a sheet that's been duplicated, duplicate the series to match
+
+(defn chart-formulas
+  "Get all the formulas in each chart on the sheet"
+  [sheet]
+  (for [chart (get-charts sheet)
+        :let [chart-xml (-> chart get-xml parse-xml)]]
+    (mapcat :content (zx/xml-> chart-xml zf/descendants (zx/tag= :c:f) zip/node))))

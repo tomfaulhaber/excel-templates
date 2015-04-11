@@ -225,11 +225,17 @@ If there are any nil values in the source collection, the corresponding cells ar
   [workbook sheet-name]
   (.removeSheetAt workbook (get-sheet-index workbook sheet-name)))
 
-(defn get-sheets
+(defn get-sheet-names
   "Get all the sheet names in a workbook in the order they appear"
   [wb]
   (for [index (range (.getNumberOfSheets wb))]
     (.getSheetName wb index)))
+
+(defn get-sheets
+  "Get all the sheet objects in a workbook in the order they appear"
+  [wb]
+  (for [index (range (.getNumberOfSheets wb))]
+    (.getSheetAt wb index)))
 
 ;; TODO validate that only valid templates are named in replacements.
 ;; use all-sheet-names and (keys replacements)
@@ -242,13 +248,15 @@ If there are any nil values in the source collection, the corresponding cells ar
     (try
       (with-open [package (OPCPackage/open excel-file)]
         (let [workbook (XSSFWorkbook. package)]
+          (println "Source sheets:" (get-sheet-names workbook))
           (loop [src-index 0
-                 src-sheets (get-sheets workbook)
+                 src-sheets (get-sheet-names workbook)
                  dst-index 0]
             (when src-sheets
               (let [[src-sheet & src-sheets] src-sheets]
-                (if-let [dst-sheets (map :sheet-name (replacements src-sheet))]
-                  (let [self-offset (.indexOf dst-sheets src-sheet)
+                (if (contains? replacements src-sheet)
+                  (let [dst-sheets (map :sheet-name (replacements src-sheet))
+                        self-offset (.indexOf dst-sheets src-sheet)
                         replace-self? (>= self-offset 0)]
                     (doseq [[dst-offset dst-sheet] (map-indexed vector dst-sheets)
                             :let [target-loc (+ dst-index dst-offset
@@ -256,8 +264,23 @@ If there are any nil values in the source collection, the corresponding cells ar
                                                   0 1))]]
                       (when (not= src-sheet dst-sheet)
                         (clone-sheet! workbook src-sheet dst-sheet target-loc)
-                        ;(c/change-sheet (.getSheet workbook dst-sheet) src-index target-loc)
+                        ;;(c/change-sheet (.getSheet workbook dst-sheet) src-index target-loc)
                         ))
+
+                    ;; Update any worksheets that point at this one
+                    ;; Currently this does charts only
+                    (when (and (seq dst-sheets)
+                               (not (and replace-self?
+                                         (= 1 (count dst-sheets)))))
+                      (println "Updating charts for" src-sheet dst-sheets)
+                      (println "Workbook sheets:" (get-sheet-names workbook))
+                      (let [these (set (conj dst-sheets src-sheet))]
+                        (println "Except:" these)
+                        (doseq [sheet (get-sheets workbook)
+                                :when (not (these (.getSheetName sheet)))]
+                          (println "Expanding" (.getSheetName sheet))
+                          (c/expand-charts sheet src-sheet dst-sheets))))
+
                     (when-not replace-self?
                       (remove-sheet! workbook src-sheet))
                     (recur (inc src-index) src-sheets (+ dst-index (count dst-sheets))))
@@ -265,7 +288,7 @@ If there are any nil values in the source collection, the corresponding cells ar
 
           (save-workbook! workbook temp-file)))
       (io/copy temp-file excel-file)
-      ; (io/copy temp-file (io/file "/tmp/debug.xlsx"))
+                                        ; (io/copy temp-file (io/file "/tmp/debug.xlsx"))
       (finally
         (io/delete-file temp-file)))))
 
