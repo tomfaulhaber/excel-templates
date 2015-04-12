@@ -67,22 +67,31 @@
 (defn tree-loc-edit
   "The rawer version of tree edit, this operates on a loc rather than a node.
    As a result, it allows for non-local manipulation of the tree."
-  [zipper matcher editor]
-  (loop [loc zipper]
+  [zipper matcher editor & colls]
+  (loop [loc zipper
+         colls colls]
     (if (zip/end? loc)
       loc
       (if (matcher loc)
-        (let [new-loc (editor loc)]
-          (recur (zip/next new-loc)))
-        (recur (zip/next loc))))))
+        (let [new-loc (apply editor loc (map first colls))]
+          (recur (zip/next new-loc) (map next colls)))
+        (recur (zip/next loc) colls)))))
 
 (defn tree-edit
   "Take a zipper, a function that matches a pattern in the tree,
   and a function that edits the current location in the tree.  Examine the tree
   nodes in depth-first order, determine whether the matcher matches, and if so
-  apply the editor."
-  [zipper matcher editor]
-  (tree-loc-edit zipper matcher #(zip/edit % editor)))
+  apply the editor.
+  Optional colls are used as in clojure.core/map with one element of each coll passed
+  as an argument to editor in sequence. These will be nil padded if necessary if
+  the number of matches is longer that the length of the collection."
+  [zipper matcher editor & colls]
+  (apply
+   tree-loc-edit
+   zipper matcher
+   (fn [loc & args]
+     (apply zip/edit loc editor args))
+   colls))
 
 (defn formula?
   "Return true if the node at the loc is a formula"
@@ -152,6 +161,13 @@
           (reduce add-series base-loc dst-sheets)))
       series-loc)))
 
+(defn reindex-series
+  "After modifying a chart, make sure that the indices and order of the series is correct"
+  [key values chart-xml]
+  (letfn [(editor [loc index]
+            (zip/edit (zx/xml1-> loc (zx/tag= key)) assoc-in [:attrs :val] (str index)))]
+    (tree-loc-edit chart-xml series? editor values)))
+
 (defn expand-all-series
   "Replicate the various series"
   [sheet src-sheet dst-sheets chart-xml]
@@ -163,7 +179,19 @@
    each referencing a single element of dst-sheets"
   [sheet src-sheet dst-sheets]
   (doseq [chart (get-charts sheet)]
-    (->> chart get-xml parse-xml (expand-all-series sheet src-sheet dst-sheets) emit-xml px (set-xml chart))))
+    (->> chart
+         get-xml
+         parse-xml
+         (expand-all-series sheet src-sheet dst-sheets)
+         zip/root
+         zip/xml-zip
+         (reindex-series :c:idx (range))
+         zip/root
+         zip/xml-zip
+         (reindex-series :c:order (range))
+         emit-xml
+         px
+         (set-xml chart))))
 
 ;;; NOTE: Everything below here is for relocating charts when sheets are
 ;;; cloned, but we're not using this right now because POI has some
