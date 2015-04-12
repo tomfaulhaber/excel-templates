@@ -248,7 +248,6 @@ If there are any nil values in the source collection, the corresponding cells ar
     (try
       (with-open [package (OPCPackage/open excel-file)]
         (let [workbook (XSSFWorkbook. package)]
-          (println "Source sheets:" (get-sheet-names workbook))
           (loop [src-index 0
                  src-sheets (get-sheet-names workbook)
                  dst-index 0]
@@ -272,13 +271,9 @@ If there are any nil values in the source collection, the corresponding cells ar
                     (when (and (seq dst-sheets)
                                (not (and replace-self?
                                          (= 1 (count dst-sheets)))))
-                      (println "Updating charts for" src-sheet dst-sheets)
-                      (println "Workbook sheets:" (get-sheet-names workbook))
                       (let [these (set (conj dst-sheets src-sheet))]
-                        (println "Except:" these)
                         (doseq [sheet (get-sheets workbook)
                                 :when (not (these (.getSheetName sheet)))]
-                          (println "Expanding" (.getSheetName sheet))
                           (c/expand-charts sheet src-sheet dst-sheets))))
 
                     (when-not replace-self?

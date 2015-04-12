@@ -173,7 +173,12 @@
   [sheet src-sheet dst-sheets chart-xml]
   (tree-loc-edit chart-xml series? (partial expand-series sheet src-sheet dst-sheets)))
 
-(defn px [x] (println "px:" x) x)
+(defn px
+  "Put this in the middle of a thread op to print the current state and keep threading the operand"
+  [x]
+  (println "px:" x)
+  x)
+
 (defn expand-charts
   "Replace any series in charts on the sheet that reference src-sheet with multiple series
    each referencing a single element of dst-sheets"
@@ -190,7 +195,6 @@
          zip/xml-zip
          (reindex-series :c:order (range))
          emit-xml
-         px
          (set-xml chart))))
 
 ;;; NOTE: Everything below here is for relocating charts when sheets are
