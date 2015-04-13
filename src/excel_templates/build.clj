@@ -1,5 +1,6 @@
 (ns excel-templates.build
   (:import [java.io File FileOutputStream]
+           [java.util Calendar]
            [org.apache.poi.openxml4j.opc OPCPackage]
            [org.apache.poi.ss.usermodel Cell Row DateUtil WorkbookFactory]
            [org.apache.poi.xssf.streaming SXSSFWorkbook]
@@ -66,16 +67,36 @@
 
      :else (do (println (str "returning nil because type is " (.getCellType cell))) nil))))
 
+
+(defprotocol IExcelValue
+  (excel-val [val wb]))
+
+(extend-protocol IExcelValue
+  Object
+  (excel-val [val wb] val)
+
+  String
+  (excel-val [val wb]
+    (.createRichTextString (.getCreationHelper wb) val))
+
+  Number
+  (excel-val [val wb]
+    (double val))
+
+  org.joda.time.DateTime
+  (excel-val [val _]
+    (let [[year mon day hour min sec]
+          (-> val bean ((juxt :year :monthOfYear :dayOfMonth
+                              :hourOfDay :minuteOfHour :secondOfMinute)))]
+      (doto (Calendar/getInstance)
+        (.set year (dec mon) day hour min sec)))))
+
+
 (defn set-val
   "Set the value in the given cell, depending on the type"
   [wb cell val]
   (try
-    (.setCellValue
-     cell
-     (cond
-      (string? val) (.createRichTextString (.getCreationHelper wb) val)
-      (number? val) (double val)
-      :else val))
+    (.setCellValue cell (excel-val val wb))
     (catch Exception e
       (throw (Exception. (pp/cl-format nil
                                        "Unable to assign value of type ~s to cell at (~d,~d)"
@@ -283,7 +304,7 @@ If there are any nil values in the source collection, the corresponding cells ar
 
           (save-workbook! workbook temp-file)))
       (io/copy temp-file excel-file)
-                                        ; (io/copy temp-file (io/file "/tmp/debug.xlsx"))
+      ;; (io/copy temp-file (io/file "/tmp/debug.xlsx"))
       (finally
         (io/delete-file temp-file)))))
 
