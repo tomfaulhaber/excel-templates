@@ -130,7 +130,7 @@
   "Take the data from the collection data-row at set the cell values in the target row accordingly.
 If there are any nil values in the source collection, the corresponding cells are not modified."
   [data-row translation-table wb sheet src-row dst-row]
-  (let [src-cols (inc (.getLastCellNum src-row))
+  (let [src-cols (inc (if src-row (.getLastCellNum src-row) -1))
         data-cols (count data-row)
         ncols (max src-cols data-cols)]
     (doseq [cell-num (range ncols)]
@@ -406,7 +406,8 @@ If there are any nil values in the source collection, the corresponding cells ar
                                 (doseq [[index data-row] (indexed data-rows)]
                                   (let [new-row (.createRow sheet (+ dst-row-num index))]
                                     (inject-data-row data-row translation-table wb sheet src-row new-row)
-                                    (copy-styles wb src-row new-row)))
+                                    (when src-row
+                                      (copy-styles wb src-row new-row))))
                                 (recur (inc src-row-num) (+ dst-row-num (count data-rows))))
                               (do
                                 (when src-row
