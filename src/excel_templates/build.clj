@@ -322,6 +322,14 @@ If there are any nil values in the source collection, the corresponding cells ar
                  {:keys [sheet-name] :as sheet-data} sheet-datas]
              [sheet-name (dissoc sheet-data :sheet-name)])))
 
+(defn row-map?
+  "Returns true if this structure is a row-map. The difference
+   between a row map and a worksheet map is that a row map doesn't
+   contain any other maps and a worksheet map does."
+  [data]
+  (letfn [(has-map? [x] (or (map? x) (some map? x)))]
+    (not (some has-map? (vals data)))))
+
 (defn normalize
   "Convert replacements to their verbose form.
     * TODO allow single map of replacements to default sheet (0))
@@ -331,7 +339,7 @@ If there are any nil values in the source collection, the corresponding cells ar
   (->> replacements
        ;; This method no longer works to support default sheet -- possibly use
        ;; schema here.
-       #_(#(if (-> % first val map?) % {0 %}))
+       (#(if (row-map? %) {0 %} %))
        (map (juxt key (comp #(if (map? %) (vector %) %) val)))
        add-sheet-names))
 
