@@ -44,7 +44,10 @@
               (let [[start end] k]
                 [start (count v) (inc (- end start))])
               [k (count v) 1]))]
-    (sort-by first (map build-entry data-seq))))
+    (let [result (sort-by first (map build-entry data-seq))]
+      (if (zero? (ffirst result))
+        result
+        (concat [[0 1 1]] result)))))
 
 ;;; I don't think we need this anymore
 (defn build-reverse-table
