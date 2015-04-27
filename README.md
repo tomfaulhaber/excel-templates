@@ -27,7 +27,7 @@ If you are using Maven, add the following repository definition to your `pom.xml
 With Leiningen:
 
 ``` clj
-[com.infolace/excel-templates "0.2.1"]
+[com.infolace/excel-templates "0.3.0"]
 ```
 
 With Maven:
@@ -36,7 +36,7 @@ With Maven:
 <dependency>
   <groupId>com.infolace</groupId>
   <artifactId>excel-templates</artifactId>
-  <version>0.2.1</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
@@ -155,9 +155,9 @@ Note that `render-to-stream` doesn't return until the entire spreadsheet has bee
 
 ### Limitations
 
-#### Formulas
+As of release 0.3.0, formulas are expanded correctly, so this limitation, mentioned previously, no longer exists.
 
-Excel templates does not parse and relocate formulas on your sheets. This means that if you have a formula and you replace a single row on your template sheet with multiple data rows, the resulting formulas are likely to be wrong.
+In general, view the open issues on the GitHub site for information on currently existing limitations.
 
 Due to limitations in POI's formula interpreter, some values of some formulas may not be updated correctly in output templates, but this should only be a problem with unusual functions.
 
@@ -179,7 +179,7 @@ Christophe Grand's [enlive][enlive] library was the direct inspiration for this 
 
 ## License
 
-Copyright © 2014 Tom Faulhaber
+Copyright © 2014-5 Tom Faulhaber
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
