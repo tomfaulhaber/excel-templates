@@ -4,8 +4,7 @@
            [org.apache.poi.openxml4j.opc OPCPackage]
            [org.apache.poi.ss.usermodel Cell Row DateUtil WorkbookFactory]
            [org.apache.poi.xssf.streaming SXSSFWorkbook]
-           [org.apache.poi.xssf.usermodel XSSFWorkbook]
-           )
+           [org.apache.poi.xssf.usermodel XSSFWorkbook])
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as sh]
             [clojure.pprint :as pp]
@@ -13,15 +12,15 @@
             [excel-templates.charts :as c]
             [excel-templates.formulas :as fo]))
 
-(defn create-temp-xlsx-file [prefix]
+(defn create-temp-xlsx-file
+  "Create a temp file with correct headers to be opened by OPCPackage"
+  [prefix]
   (let [tmpfile (File/createTempFile prefix ".xlsx")
         wb (XSSFWorkbook.)
         fos (FileOutputStream. (.getPath tmpfile))]
     (.write wb fos)
     (.close fos)
-    tmpfile)
-  )
-
+    tmpfile))
 
 (defn indexed
   "For the collection coll with elements x0..xn, return a lazy sequence
@@ -190,22 +189,18 @@ If there are any nil values in the source collection, the corresponding cells ar
       (io/copy template-file tmpfile)
       (let [pkg (OPCPackage/open tmpfile)
             wb (XSSFWorkbook. pkg)]
-          (doseq [sheet-num (range (.getNumberOfSheets wb))]
-            (let [sheet (.getSheetAt wb sheet-num)
-                  nrows (inc (.getLastRowNum sheet))]
-              (doseq [row-num (reverse (range nrows))]
-                (when-let [row (.getRow sheet row-num)]
-                  (.removeRow sheet row)))))
-          ;; Write the resulting output Workbook
-          (with-open [fos (FileOutputStream. output-file)]
-            (.write wb fos)
-
-            )
-          (.close pkg)
-          )
+        (doseq [sheet-num (range (.getNumberOfSheets wb))]
+          (let [sheet (.getSheetAt wb sheet-num)
+                nrows (inc (.getLastRowNum sheet))]
+            (doseq [row-num (reverse (range nrows))]
+              (when-let [row (.getRow sheet row-num)]
+                (.removeRow sheet row)))))
+        ;; Write the resulting output Workbook
+        (with-open [fos (FileOutputStream. output-file)]
+          (.write wb fos))
+        (.close pkg))
       (finally
-        (io/delete-file tmpfile)
-        ))))
+        (io/delete-file tmpfile)))))
 
 (defn get-all-sheet-names
   [wb]
@@ -323,8 +318,7 @@ If there are any nil values in the source collection, the corresponding cells ar
       (io/copy temp-file excel-file)
       ;; (io/copy temp-file (io/file "/tmp/debug.xlsx"))
       (finally
-        (io/delete-file temp-file)
-        ))))
+        (io/delete-file temp-file)))))
 
 (defn replacements-by-sheet-name
   "Convert replacements to a map of concrete sheet name -> sheet data map.
@@ -446,9 +440,9 @@ If there are any nil values in the source collection, the corresponding cells ar
                     ;; Write the resulting output Workbook
                     (with-open [fos (FileOutputStream. (nth outputs sheet-num))]
                       (.write wb fos))
-                    (.close pkg)
                     (catch Exception e (.printStackTrace e))
                     (finally
+                      (.close pkg)
                       (when-not src-has-formula?
                         (.dispose wb))))))
 
@@ -468,13 +462,11 @@ If there are any nil values in the source collection, the corresponding cells ar
   [template-file output-stream replacements]
   (let [temp-output-file (create-temp-xlsx-file "for-stream-output")]
     (try
-
       (render-to-file template-file temp-output-file replacements)
       (with-open [input-stream (io/input-stream temp-output-file)]
         (io/copy input-stream output-stream))
-      (finally (
-                 io/delete-file temp-output-file
-                 )))))
+      (finally 
+        (io/delete-file temp-output-file )))))
 
 (comment (let [template-file "foo.xlsx"
                output-file "/tmp/bar.xlsx"
