@@ -166,7 +166,7 @@ If there are any nil values in the source collection, the corresponding cells ar
   (let [f (io/file template-file)]
     (if (.exists f)
       f
-      (-> template-file io/resource io/file))))
+      (-> template-file io/resource io/input-stream))))
 
 
 (defn build-base-output
