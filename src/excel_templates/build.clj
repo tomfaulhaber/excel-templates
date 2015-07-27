@@ -424,6 +424,9 @@ If there are any nil values in the source collection, the corresponding cells ar
                                     (copy-styles wb src-row new-row)))
                                 (recur (inc src-row-num) (inc dst-row-num)))))))
                       (c/transform-charts sheet translation-table))
+                    ;; Update cached results for each formula:
+                    ;; https://poi.apache.org/spreadsheet/eval.html
+                    (-> wb .getCreationHelper .createFormulaEvaluator .evaluateAll)
                     ;; Write the resulting output Workbook
                     (with-open [fos (FileOutputStream. (nth outputs sheet-num))]
                       (.write wb fos))
