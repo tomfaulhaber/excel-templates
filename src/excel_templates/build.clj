@@ -1,5 +1,5 @@
 (ns excel-templates.build
-  (:import [java.io File FileOutputStream]
+  (:import [java.io File FileOutputStream FileInputStream]
            [java.util Calendar]
            [org.apache.poi.openxml4j.opc OPCPackage]
            [org.apache.poi.ss.usermodel Cell Row DateUtil WorkbookFactory]
@@ -11,6 +11,15 @@
             [clojure.set :as set]
             [excel-templates.charts :as c]
             [excel-templates.formulas :as fo]))
+
+(defn create-temp-xlsx-file
+  "Create a temp file with correct headers to be opened by OPCPackage"
+  [prefix]
+  (let [tmpfile (File/createTempFile prefix ".xlsx")
+        wb (XSSFWorkbook.)]
+    (with-open [fos (FileOutputStream. (.getPath tmpfile))]
+      (.write wb fos))
+    tmpfile))
 
 (defn indexed
   "For the collection coll with elements x0..xn, return a lazy sequence
@@ -174,19 +183,20 @@ If there are any nil values in the source collection, the corresponding cells ar
    This keeps all the styles and annotations while letting us write the
    spreadsheet using streaming so it can be arbitrarily large"
   [template-file output-file]
-  (let [tmpfile (File/createTempFile "excel-template" ".xlsx")]
+  (let [tmpfile (create-temp-xlsx-file "excel-template")]
     (try
       (io/copy template-file tmpfile)
-      (let [wb (XSSFWorkbook. (.getPath tmpfile))]
-        (doseq [sheet-num (range (.getNumberOfSheets wb))]
-          (let [sheet (.getSheetAt wb sheet-num)
-                nrows (inc (.getLastRowNum sheet))]
-            (doseq [row-num (reverse (range nrows))]
-              (when-let [row (.getRow sheet row-num)]
-                (.removeRow sheet row)))))
-        ;; Write the resulting output Workbook
-        (with-open [fos (FileOutputStream. output-file)]
-          (.write wb fos)))
+      (with-open [pkg (OPCPackage/open tmpfile)]
+        (let [wb (XSSFWorkbook. pkg)]
+          (doseq [sheet-num (range (.getNumberOfSheets wb))]
+            (let [sheet (.getSheetAt wb sheet-num)
+                  nrows (inc (.getLastRowNum sheet))]
+              (doseq [row-num (reverse (range nrows))]
+                (when-let [row (.getRow sheet row-num)]
+                  (.removeRow sheet row)))))
+          ;; Write the resulting output Workbook
+          (with-open [fos (FileOutputStream. output-file)]
+            (.write wb fos))))
       (finally
         (io/delete-file tmpfile)))))
 
@@ -386,52 +396,53 @@ If there are any nil values in the source collection, the corresponding cells ar
         (with-open [pkg (OPCPackage/open tmpcopy)]
           (let [template (XSSFWorkbook. pkg)
                 intermediate-files (for [index (range (dec (.getNumberOfSheets template)))]
-                                     (File/createTempFile (str "excel-intermediate-" index) ".xlsx"))
+                                     (create-temp-xlsx-file (str "excel-intermediate-" index)))
                 inputs  (vec (concat [tmpfile]          intermediate-files))
                 outputs (vec (concat intermediate-files [output-file]     ))]
             (try
               (doseq [sheet-num (range (.getNumberOfSheets template))]
-                (let [src-sheet (.getSheetAt template sheet-num)
-                      sheet-name (.getSheetName src-sheet)
-                      sheet-data (or (get replacements sheet-name)
-                                     (get replacements sheet-num) {})
-                      nrows (inc (.getLastRowNum src-sheet))
-                      src-has-formula? (or (has-formula? src-sheet)
-                                           (c/has-chart? src-sheet))
-                      wb (XSSFWorkbook. (.getPath (nth inputs sheet-num)))
-                      wb (if src-has-formula? wb (SXSSFWorkbook. wb))]
-                  (try
-                    (let [sheet (.getSheetAt wb sheet-num)]
-                      ;; loop through the rows of the template, copying
-                      ;; from the template or injecting data rows as
-                      ;; appropriate
-                      (loop [src-row-num 0
-                             dst-row-num 0]
-                        (when (< src-row-num nrows)
-                          (let [src-row (.getRow src-sheet src-row-num)]
-                            (if-let [data-rows (get sheet-data src-row-num)]
-                              (do
-                                (doseq [[index data-row] (indexed data-rows)]
-                                  (let [new-row (.createRow sheet (+ dst-row-num index))]
-                                    (inject-data-row data-row translation-table wb sheet src-row new-row)
-                                    (when src-row
-                                      (copy-styles wb src-row new-row))))
-                                (recur (inc src-row-num) (+ dst-row-num (count data-rows))))
-                              (do
-                                (when src-row
-                                  (let [new-row (.createRow sheet dst-row-num)]
-                                    (copy-row translation-table wb sheet src-row new-row)
-                                    (copy-styles wb src-row new-row)))
-                                (recur (inc src-row-num) (inc dst-row-num)))))))
-                      (c/transform-charts sheet translation-table))
-                    ;; Write the resulting output Workbook
-                    (with-open [fos (FileOutputStream. (nth outputs sheet-num))]
-                      (.write wb fos))
-                    (catch Exception e (.printStackTrace e))
-                    (finally
-                      (when-not src-has-formula?
-                        (.dispose wb))))))
-
+                (with-open [input-pkg (OPCPackage/open (nth inputs sheet-num))]
+                  (let [src-sheet (.getSheetAt template sheet-num)
+                        sheet-name (.getSheetName src-sheet)
+                        sheet-data (or (get replacements sheet-name)
+                                       (get replacements sheet-num) {})
+                        nrows (inc (.getLastRowNum src-sheet))
+                        src-has-formula? (or (has-formula? src-sheet)
+                                             (c/has-chart? src-sheet))
+                        wb (XSSFWorkbook. input-pkg)
+                        wb (if src-has-formula? wb (SXSSFWorkbook. wb))]
+                    (try
+                      (let [sheet (.getSheetAt wb sheet-num)]
+                        ;; loop through the rows of the template, copying
+                        ;; from the template or injecting data rows as
+                        ;; appropriate
+                        (loop [src-row-num 0
+                               dst-row-num 0]
+                          (when (< src-row-num nrows)
+                            (let [src-row (.getRow src-sheet src-row-num)]
+                              (if-let [data-rows (get sheet-data src-row-num)]
+                                (do
+                                  (doseq [[index data-row] (indexed data-rows)]
+                                    (let [new-row (.createRow sheet (+ dst-row-num index))]
+                                      (inject-data-row data-row translation-table wb sheet src-row new-row)
+                                      (when src-row
+                                        (copy-styles wb src-row new-row))))
+                                  (recur (inc src-row-num) (+ dst-row-num (count data-rows))))
+                                (do
+                                  (when src-row
+                                    (let [new-row (.createRow sheet dst-row-num)]
+                                      (copy-row translation-table wb sheet src-row new-row)
+                                      (copy-styles wb src-row new-row)))
+                                  (recur (inc src-row-num) (inc dst-row-num)))))))
+                        (c/transform-charts sheet translation-table))
+                      ;; Write the resulting output Workbook
+                      (with-open [fos (FileOutputStream. (nth outputs sheet-num))]
+                        (.write wb fos))
+                      (catch Exception e (.printStackTrace e))
+                      (finally
+                        (when-not src-has-formula?
+                          (.dispose wb)))))))
+              
               (catch Exception e (.printStackTrace e))
               (finally
                 (doseq [f intermediate-files] (io/delete-file f)))))))
@@ -444,11 +455,13 @@ If there are any nil values in the source collection, the corresponding cells ar
   "Build a report based on a spreadsheet template, write it to the output
   stream."
   [template-file output-stream replacements]
-  (let [temp-output-file (File/createTempFile "for-stream-output" ".xlsx")]
+  (let [temp-output-file (create-temp-xlsx-file "for-stream-output")]
     (try
       (render-to-file template-file temp-output-file replacements)
-      (io/copy (io/input-stream temp-output-file) output-stream)
-      (finally (io/delete-file temp-output-file)))))
+      (with-open [input-stream (io/input-stream temp-output-file)]
+        (io/copy input-stream output-stream))
+      (finally 
+        (io/delete-file temp-output-file )))))
 
 (comment (let [template-file "foo.xlsx"
                output-file "/tmp/bar.xlsx"
