@@ -115,9 +115,29 @@ use the inner map:
 
 I show the data as vectors above, but it can actually be any seq.
 
+To replace a template worksheet with 3 (repeated) worksheets:
+
+```clojure
+{"Squares" [{:sheet-name "Squares"
+             3 [[1 1]
+                [2 4]
+                [3 9]]}
+            {:sheet-name "Cubes"
+             3 [[1 1]
+                [2 8]
+                [3 27]]}
+            {:sheet-name "Tesseractics"
+             3 [[1 1]
+                [2 16]
+                [3 81]]}]}
+```
+
+The `:sheet-name` key is required to identify the fact that these worksheets are to be templated from a
+worksheet other than one which bears their name.
+
 ### Generating a spreadsheet
 
-To generate a new spreadsheet from code, use the `build-with-template` function, passing in three arguments:
+To generate a new spreadsheet from code, use the `render-to-file` function, passing in three arguments:
 
 1. The name of the input template workbook file or resource.
 2. The name of the output workbook to create
