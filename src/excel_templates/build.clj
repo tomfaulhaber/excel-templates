@@ -377,9 +377,14 @@ If there are any nil values in the source collection, the corresponding cells ar
               v)))
    replacements))
 
+(defn handle-exception [e opts]
+  (if (:throw-exceptions opts)
+    (throw e)
+    (.printStackTrace e)))
+
 (defn render-to-file
   "Build a report based on a spreadsheet template"
-  [template-file output-file replacements]
+  [template-file output-file replacements & [opts]]
   (let [tmpfile (File/createTempFile "excel-output" ".xlsx")
         tmpcopy (File/createTempFile "excel-template-copy" ".xlsx")
         replacements (normalize replacements)]
@@ -438,15 +443,18 @@ If there are any nil values in the source collection, the corresponding cells ar
                       ;; Write the resulting output Workbook
                       (with-open [fos (FileOutputStream. (nth outputs sheet-num))]
                         (.write wb fos))
-                      (catch Exception e (.printStackTrace e))
+                      (catch Exception e
+                        (handle-exception e opts))
                       (finally
                         (when-not src-has-formula?
                           (.dispose wb)))))))
-              
-              (catch Exception e (.printStackTrace e))
+
+              (catch Exception e
+                (handle-exception e opts))
               (finally
                 (doseq [f intermediate-files] (io/delete-file f)))))))
-      (catch Exception e (.printStackTrace e))
+      (catch Exception e
+        (handle-exception e opts))
       (finally
         (io/delete-file tmpfile)
         (io/delete-file tmpcopy)))))
@@ -460,7 +468,7 @@ If there are any nil values in the source collection, the corresponding cells ar
       (render-to-file template-file temp-output-file replacements)
       (with-open [input-stream (io/input-stream temp-output-file)]
         (io/copy input-stream output-stream))
-      (finally 
+      (finally
         (io/delete-file temp-output-file )))))
 
 (comment (let [template-file "foo.xlsx"
