@@ -7,7 +7,7 @@
     (is (= "ABC " (safe-sheet-name "ABC*")))
     (is (= " ABC    " (safe-sheet-name "\\ABC/?:*"))))
 
-  (testing "sanitizes the given sheet name with a given replacemen"
+  (testing "sanitizes the given sheet name with a given replacement"
     (is (= "ABCx" (safe-sheet-name "ABC*" \x)))
     (is (= "_ABC____" (safe-sheet-name "\\ABC/?:*" \_)))))
 
