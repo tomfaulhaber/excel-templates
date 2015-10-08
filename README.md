@@ -1,5 +1,7 @@
 # Excel Templates
 
+[![Clojars Project](http://clojars.org/com.infolace/excel-templates/latest-version.svg)]
+
 Excel templates is designed to build Excel spreadsheets by combining two parts:
 
 1. A Excel file that works as a template defining layout and formatting information for the spreadsheet you're creating
@@ -27,7 +29,7 @@ If you are using Maven, add the following repository definition to your `pom.xml
 With Leiningen:
 
 ``` clj
-[com.infolace/excel-templates "0.3.0"]
+[com.infolace/excel-templates "0.3.1"]
 ```
 
 With Maven:
@@ -36,7 +38,7 @@ With Maven:
 <dependency>
   <groupId>com.infolace</groupId>
   <artifactId>excel-templates</artifactId>
-  <version>0.3.0</version>
+  <version>0.3.1</version>
 </dependency>
 ```
 
