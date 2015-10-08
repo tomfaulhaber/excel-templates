@@ -1,6 +1,6 @@
 # Excel Templates
 
-[![Clojars Project](http://clojars.org/com.infolace/excel-templates/latest-version.svg)]
+![Clojars Project](http://clojars.org/com.infolace/excel-templates/latest-version.svg)
 
 Excel templates is designed to build Excel spreadsheets by combining two parts:
 
