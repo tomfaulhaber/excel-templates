@@ -438,15 +438,11 @@ If there are any nil values in the source collection, the corresponding cells ar
                       ;; Write the resulting output Workbook
                       (with-open [fos (FileOutputStream. (nth outputs sheet-num))]
                         (.write wb fos))
-                      (catch Exception e (.printStackTrace e))
                       (finally
                         (when-not src-has-formula?
                           (.dispose wb)))))))
-              
-              (catch Exception e (.printStackTrace e))
               (finally
                 (doseq [f intermediate-files] (io/delete-file f)))))))
-      (catch Exception e (.printStackTrace e))
       (finally
         (io/delete-file tmpfile)
         (io/delete-file tmpcopy)))))
@@ -460,7 +456,7 @@ If there are any nil values in the source collection, the corresponding cells ar
       (render-to-file template-file temp-output-file replacements)
       (with-open [input-stream (io/input-stream temp-output-file)]
         (io/copy input-stream output-stream))
-      (finally 
+      (finally
         (io/delete-file temp-output-file )))))
 
 (comment (let [template-file "foo.xlsx"
