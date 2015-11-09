@@ -387,7 +387,8 @@ If there are any nil values in the source collection, the corresponding cells ar
       ;; We copy the template file because otherwise POI will modify it even
       ;; though it's our input file. That's annoying from a source code
       ;; control perspective.
-      (io/copy (get-template template-file) tmpcopy)
+      (with-open [template (get-template template-file)]
+        (io/copy template tmpcopy))
       (create-missing-sheets! tmpcopy replacements)
       (build-base-output tmpcopy tmpfile)
       (let [replacements (replacements-by-sheet-name replacements)
