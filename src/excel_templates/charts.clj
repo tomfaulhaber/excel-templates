@@ -54,7 +54,7 @@
   [loc]
   (-> (with-out-str (-> loc zip/root xml/emit))
       (str/replace #"^.*\n" "")
-      (str/replace "\n" "")))
+      (str/replace #"(\r?\n|\r)" "")))
 
 (defn transform-formula
   "Transform a single chart formula according to the translation table"
