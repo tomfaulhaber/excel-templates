@@ -16,6 +16,11 @@
 
 ;;; Manipulation of the POI objects for charts
 
+(defmacro mjuxt
+  "Like juxt, but for Java methods"
+  [& methods]
+  `(juxt ~@(map #(list 'memfn %) methods)))
+
 ;;; TODO createDrawingPatriarch should be replaced by getDrawingPatriarch when that's available in POI 3.12
 (defn get-charts
   "Get the charts from a worksheet"
@@ -214,7 +219,7 @@
   (->> chart-xml parse-xml (relocate-xml sheet old-index new-index) emit-xml))
 
 (defn change-sheet
-  "Update any reference in the charts on this sheet that point to the base sheet to
+  "Update any reference in the charts on this sheet that points to the base sheet to
    point to this sheet"
   [sheet old-index new-index]
   (println (str "Changing sheet " (.getSheetName sheet) "(" (-> sheet .getWorkbook (.getSheetIndex sheet)) ") from " old-index " to " new-index))
@@ -232,7 +237,7 @@
 (defn anchors-by-id
   "Gets a map of anchor objects by ID that show where the graphic with that ID is on the sheet"
   [sheet]
-  (let [anchors (-> sheet .createDrawingPatriarch bean :CTDrawing .getTwoCellAnchorList)]
+  (let [anchors (-> sheet .createDrawingPatriarch .getCTDrawing .getTwoCellAnchorList)]
     (into {} (for [anchor anchors]
                [(-> anchor .getGraphicFrame .getGraphic .getGraphicData .getDomNode
                     .getChildNodes (.item 0) (.getAttribute "r:id"))
@@ -260,6 +265,42 @@
                    (.getColOff to)   (.getRowOff to)
                    (.getCol from)    (.getRow from)
                    (.getCol to)      (.getRow to))))
+
+
+(defn get-anchor-location
+  "Get the location info from an anchor so we can create a new one later"
+  [anchor]
+  (zipmap [:from :to]
+          (map (comp (partial zipmap [:col-off :row-off :col :row])
+                     (mjuxt getColOff getRowOff getCol getRow))
+               ((mjuxt getFrom getTo) anchor))))
+
+(defn part-path
+  "Get the path to this part for this object in the zip file"
+  [part]
+  (-> part .getPackagePart .getPartName .getName (subs 1)))
+
+(defn rels-path
+  "Get the path to the relationship definitions for this object in the zip file"
+  [part]
+  (let [[_ head tail] (re-matches #"^(.*)/([^/]+)" (part-path part))]
+    (str head "/_rels/" tail ".rels")))
+
+(defn get-chart-data
+  "Get all the data the we need to delete and then recreate the charts for this sheet"
+  [sheet]
+  (let [anchors (anchors-by-id sheet)]
+    (for [chart (get-charts sheet)
+          :let [drawing (.createDrawingPatriarch sheet)
+                chart-id (get-part-id sheet chart)]]
+      {:sheet          (.getSheetName sheet)
+       :chart-path     (part-path chart)
+       :drawing-path   (part-path drawing)
+       :drawing-rels   (rels-path drawing)
+       :chart-id       chart-id
+       :chart-location (get-anchor-location (anchors chart-id))
+       :chart-xml      (get-xml chart)})))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

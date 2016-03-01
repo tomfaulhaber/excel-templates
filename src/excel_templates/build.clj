@@ -4,7 +4,7 @@
            [org.apache.poi.openxml4j.opc OPCPackage]
            [org.apache.poi.ss.usermodel Cell Row DateUtil WorkbookFactory]
            [org.apache.poi.xssf.streaming SXSSFWorkbook]
-           [org.apache.poi.xssf.usermodel XSSFWorkbook])
+           [org.apache.poi.xssf.usermodel XSSFChartSheet XSSFWorkbook])
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as sh]
             [clojure.pprint :as pp]
@@ -268,6 +268,25 @@ If there are any nil values in the source collection, the corresponding cells ar
   (for [index (range (.getNumberOfSheets wb))]
     (.getSheetAt wb index)))
 
+(defn chart-sheet?
+  "Return true if this sheet is a chart sheet"
+  [sheet]
+  (instance? XSSFChartSheet sheet))
+
+(defn extract-charts
+  "Get all the charts on the various sheets and return their XML as a dictionary
+  keyed by sheet name. Then, delete the charts from the original workbook.
+
+  This is necessary because POI has a bug cloning sheets with charts on them.
+  See https://github.com/tomfaulhaber/excel-templates/issues/7 for info."
+  [workbook]
+  (into
+   {}
+   (for [sheet (filter (complement chart-sheet?)
+                       (get-sheets workbook))]
+     [(.getSheetName sheet)
+      (c/get-chart-data sheet)])))
+
 ;; TODO validate that only valid templates are named in replacements.
 ;; use all-sheet-names and (keys replacements)
 
@@ -279,6 +298,7 @@ If there are any nil values in the source collection, the corresponding cells ar
     (try
       (with-open [package (OPCPackage/open excel-file)]
         (let [workbook (XSSFWorkbook. package)]
+          (extract-charts workbook)
           (loop [src-index 0
                  src-sheets (get-sheet-names workbook)
                  dst-index 0]
