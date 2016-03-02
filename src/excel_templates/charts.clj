@@ -301,6 +301,62 @@
        :chart-location (get-anchor-location (anchors chart-id))
        :chart-xml      (get-xml chart)})))
 
+(defn rels-for-object
+  "Returns a set of relationship Ids that pertain to this object"
+  [chart-data object-name]
+  (set (map :chart-id
+            (filter #(= object-name (:drawing-rels %))
+                    (apply concat (vals chart-data))))))
+
+(defn remove-charts
+  "Returns a map of chart names to the keyword :delete. This will cause the chart objects to be
+  dropped."
+  [chart-data]
+  (zipmap (map :chart-path (apply concat (vals chart-data)))
+          (repeat :delete)))
+
+(defn remove-drawing-rels
+  "Returns a map of relationship sheets to a function that will remove the correct relationships on each one"
+  [chart-data]
+  (let [ids-by-rels (fo/map-values
+                     #(set (map :chart-id %))
+                     (group-by :drawing-rels (apply concat (vals chart-data))))]
+    (fo/map-values
+     (fn [id-set]
+       (fn [xml-data]
+         (assoc xml-data :content (filter #(not (id-set (get-in % [:attrs :Id])))
+                                          (:content xml-data)))))
+     ids-by-rels)))
+
+(defn remove-anchors
+  "Returns a map of drawing sheets to functions that will move the anchors corresponding to the charts"
+  [chart-data]
+  (let [ids-by-drawings (fo/map-values
+                         #(set (map :chart-id %))
+                         (group-by :drawing-path (apply concat (vals chart-data))))]
+    (fo/map-values
+     (fn [id-set]
+       (fn [xml-data]
+         (loop [data xml-data]
+           (if-let [new-data (zx/xml1->
+                              (zip/xml-zip data)
+                              zf/descendants
+                              (zx/tag= :c:chart)
+                              #(boolean (id-set (zx/attr % :r:id)))
+                              zf/ancestors
+                              (zx/tag= :xdr:twoCellAnchor)
+                              zip/remove
+                              zip/root)]
+             (recur new-data)
+             data))))
+     ids-by-drawings)))
+
+(defn chart-removal-rules
+  "Combine all the rules to remove charts from this workbook"
+  [chart-data]
+  (apply merge
+         ((juxt remove-charts remove-drawing-rels remove-anchors)
+          chart-data)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

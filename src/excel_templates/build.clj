@@ -1,6 +1,7 @@
 (ns excel-templates.build
   (:import [java.io File FileOutputStream FileInputStream]
            [java.util Calendar]
+           [java.util.zip ZipEntry ZipFile ZipOutputStream]
            [org.apache.poi.openxml4j.opc OPCPackage]
            [org.apache.poi.ss.usermodel Cell Row DateUtil WorkbookFactory]
            [org.apache.poi.xssf.streaming SXSSFWorkbook]
@@ -9,6 +10,7 @@
             [clojure.java.shell :as sh]
             [clojure.pprint :as pp]
             [clojure.set :as set]
+            [clojure.string :as str]
             [excel-templates.charts :as c]
             [excel-templates.formulas :as fo]))
 
@@ -286,6 +288,44 @@ If there are any nil values in the source collection, the corresponding cells ar
                        (get-sheets workbook))]
      [(.getSheetName sheet)
       (c/get-chart-data sheet)])))
+
+(defn xml-to-str
+  "Generate an XML string from parsed XML using clojure.xml"
+  [xml-data]
+  (-> (with-out-str (-> xml-data xml/emit))
+      (str/replace #"^.*\n" "")
+      (str/replace #"(\r?\n|\r)" "")))
+
+(defn filter-zip-file
+  "Filter zip file copies the zip file deleting and modifying the entries according to the rules
+  provided"
+  [input-file output-file rules]
+  (let [buf-size 65536
+        buf (byte-array buf-size)]
+    (with-open [zip-file (ZipFile. input-file)
+                output (ZipOutputStream. (io/output-stream output-file))]
+      (doseq [entry (enumeration-seq (.entries zip-file))
+              :let [entry-name (.getName entry)
+                    new-entry (ZipEntry. entry-name)]]
+        (when-not (= :delete (rules entry-name))
+          (with-open [entry-data (.getInputStream zip-file entry)]
+            (if-let [edit-fn (rules entry-name)]
+              (let [xml-data (xml/parse entry-data)
+                    new-data (edit-fn xml-data)
+                    data-str (xml-to-str new-data)
+                    bytes (.getBytes data-str "UTF-8")
+                    len (alength bytes)]
+                (.putNextEntry output new-entry)
+                (.write output bytes 0 len)
+                (.closeEntry output))
+              (do
+                (.putNextEntry output new-entry)
+                (loop []
+                 (let [bytes-read (.read entry-data buf 0 buf-size)]
+                   (when (pos? bytes-read)
+                     (.write output buf 0 bytes-read)
+                     (recur))))
+                (.closeEntry output)))))))))
 
 ;; TODO validate that only valid templates are named in replacements.
 ;; use all-sheet-names and (keys replacements)
