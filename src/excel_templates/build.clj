@@ -289,6 +289,13 @@ If there are any nil values in the source collection, the corresponding cells ar
      [(.getSheetName sheet)
       (c/get-chart-data sheet)])))
 
+(defn charts-from-file
+  "Extract the chart info from a file"
+  [excel-file]
+  (with-open [package (OPCPackage/open excel-file)]
+    (let [workbook (XSSFWorkbook. package)]
+      (extract-charts workbook))))
+
 (defn xml-to-str
   "Generate an XML string from parsed XML using clojure.xml"
   [xml-data]
@@ -327,18 +334,23 @@ If there are any nil values in the source collection, the corresponding cells ar
                      (recur))))
                 (.closeEntry output)))))))))
 
+
+(defmacro memfnx
+  "Like memfn, but gives n-args arguments so I don't have to name them."
+  [method n-args]
+  `(memfn ~method ~@(repeatedly n-args #(gensym "arg"))))
+
 ;; TODO validate that only valid templates are named in replacements.
 ;; use all-sheet-names and (keys replacements)
 
 (defn create-missing-sheets!
   "Updates the excel file with any missing sheets, referred to by :sheet-name
   in the replacements."
-  [excel-file replacements]
-  (let [temp-file (File/createTempFile "add-sheets" ".xlsx")]
+  [excel-file replacements chart-data]
+  (let [temp-file (File/createTempFile "excel-add-sheets" ".xlsx")]
     (try
       (with-open [package (OPCPackage/open excel-file)]
         (let [workbook (XSSFWorkbook. package)]
-          (extract-charts workbook)
           (loop [src-index 0
                  src-sheets (get-sheet-names workbook)
                  dst-index 0]
@@ -353,9 +365,23 @@ If there are any nil values in the source collection, the corresponding cells ar
                                                 (if (and replace-self? (< self-offset dst-offset))
                                                   0 1))]]
                       (when (not= src-sheet dst-sheet)
-                        (clone-sheet! workbook src-sheet dst-sheet target-loc)
-                        ;;(c/change-sheet (.getSheet workbook dst-sheet) src-index target-loc)
-                        ))
+                        (clone-sheet! workbook src-sheet dst-sheet target-loc))
+
+                      ;; Add the charts back into the sheets
+                      (when-let [charts (chart-data src-sheet)]
+                        (doseq [{:keys [chart-location chart-xml]} charts]
+                          (let [target (.getSheet workbook dst-sheet)
+                                new-xml (c/chart-change-sheet target src-index target-loc chart-xml)
+                                drawing (.createDrawingPatriarch target)
+                                anchor-points (map #(get-in chart-location %)
+                                                   [[:from :col-off] [:from :row-off]
+                                                    [:to   :col-off] [:to   :row-off]
+                                                    [:from :col    ] [:from :row    ]
+                                                    [:to   :col    ] [:to   :row    ]])
+                                anchor (apply (memfnx createAnchor 8) drawing anchor-points)
+                                new-chart (.createChart drawing anchor)]
+                            (c/set-xml chart new-xml)))))
+
 
                     ;; Update any worksheets that point at this one
                     ;; Currently this does charts only
@@ -441,6 +467,7 @@ If there are any nil values in the source collection, the corresponding cells ar
   "Build a report based on a spreadsheet template"
   [template-file output-file replacements]
   (let [tmpfile (File/createTempFile "excel-output" ".xlsx")
+        tmpcopy0 (File/createTempFile "excel-template-firstcopy" ".xlsx")
         tmpcopy (File/createTempFile "excel-template-copy" ".xlsx")
         replacements (normalize replacements)]
     (try
@@ -448,8 +475,10 @@ If there are any nil values in the source collection, the corresponding cells ar
       ;; though it's our input file. That's annoying from a source code
       ;; control perspective.
       (with-open [template (get-template template-file)]
-        (io/copy template tmpcopy))
-      (create-missing-sheets! tmpcopy replacements)
+        (io/copy template tmpcopy0))
+      (let [chart-data (charts-from-file tmpcopy0)]
+        (filter-zip-file tmpcopy0 tmpcopy (c/chart-removal-rules chart-data))
+        (create-missing-sheets! tmpcopy replacements chart-data))
       (build-base-output tmpcopy tmpfile)
       (let [replacements (replacements-by-sheet-name replacements)
             translation-table (fo/build-translation-tables replacements)
@@ -466,7 +495,8 @@ If there are any nil values in the source collection, the corresponding cells ar
                   (let [src-sheet (.getSheetAt template sheet-num)
                         sheet-name (.getSheetName src-sheet)
                         sheet-data (or (get replacements sheet-name)
-                                       (get replacements sheet-num) {})
+                                       (get replacements sheet-num)
+                                       {})
                         nrows (inc (.getLastRowNum src-sheet))
                         src-has-formula? (or (has-formula? src-sheet)
                                              (c/has-chart? src-sheet))
@@ -509,6 +539,7 @@ If there are any nil values in the source collection, the corresponding cells ar
                 (doseq [f intermediate-files] (io/delete-file f)))))))
       (finally
         (io/delete-file tmpfile)
+        (io/delete-file tmpcopy0)
         (io/delete-file tmpcopy)))))
 
 (defn render-to-stream
