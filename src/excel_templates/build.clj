@@ -11,6 +11,7 @@
             [clojure.pprint :as pp]
             [clojure.set :as set]
             [clojure.string :as str]
+            [clojure.xml :as xml]
             [excel-templates.charts :as c]
             [excel-templates.formulas :as fo]))
 
