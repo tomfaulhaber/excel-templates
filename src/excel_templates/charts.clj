@@ -185,6 +185,21 @@
   (println "px:" x)
   x)
 
+(defn expand-xml-str
+  "Replace any series a chart that references a sheet that's being cloned to point to all
+   the clones. "
+  [sheet src-sheet dst-sheets xml-str]
+  (->> xml-str
+       parse-xml
+       (expand-all-series sheet src-sheet dst-sheets)
+       zip/root
+       zip/xml-zip
+       (reindex-series :c:idx (range))
+       zip/root
+       zip/xml-zip
+       (reindex-series :c:order (range))
+       emit-xml))
+
 (defn expand-charts
   "Replace any series in charts on the sheet that reference src-sheet with multiple series
    each referencing a single element of dst-sheets"
@@ -192,27 +207,12 @@
   (doseq [chart (get-charts sheet)]
     (->> chart
          get-xml
-         parse-xml
-         (expand-all-series sheet src-sheet dst-sheets)
-         zip/root
-         zip/xml-zip
-         (reindex-series :c:idx (range))
-         zip/root
-         zip/xml-zip
-         (reindex-series :c:order (range))
-         emit-xml
+         (expand-xml-str sheet src-sheet dst-sheets)
          (set-xml chart))))
-
-;;; NOTE: Everything below here is for relocating charts when sheets are
-;;; cloned, but we're not using this right now because POI has some
-;;; fundamental problems with cloning sheets with drawing objects on them.
-;;; I think I can work around this, but I don't have time right now.
 
 ;;; When we duplicate a sheet with charts on it, we need to make sure
 ;;; that any charts on that sheet point to the new sheet in any places
 ;;; where they were pointing to the base sheet
-
-
 
 (defn chart-change-sheet
   "Handle a single chart that was duplicated from an old sheet to a new sheet"
@@ -230,6 +230,19 @@
     (->> chart get-xml (chart-change-sheet sheet old-index new-index) (set-xml chart))))
 
 ;;; Code for copying charts when we're duplicating a sheet
+;;; Because POI can't clone a sheet with charts on it, we have to do the
+;;; following:
+;;; 1) Get the data about all the charts that are on worksheets
+;;; 2) Delete charts from the worksheets (leave charts on the chartsheets, because they're different)
+;;; 3) Rename the charts on chartsheets to be chart1, chart2, etc. because of the way POI creates
+;;;    new charts
+;;; 4) Add the charts back onto the sheets after they've been cloned (we do all worksheets because
+;;;    it's easier that restricting to only cloned ones).
+;;; 5) Make any charts that point to the new cloned charts have the right references
+;;; 6) Do the same for all the saved charts since some of them won't have been added back into the
+;;;    sheets yet.
+;;;
+;;; The logic to do this is split between here and create-missing-sheets in build.clj
 
 (defn chart-sheet?
   "Return true if this sheet is a chart sheet"
@@ -394,6 +407,15 @@
   (apply merge
          (map #(% chart-data)
               [remove-charts remove-drawing-rels remove-anchors renumber-chart-sheets])))
+
+(defn expand-chart-data
+  "Expand the xml charts that we've captured if they have references to sheets that are being cloned"
+  [workbook src-sheet dst-sheets chart-data]
+  (doall
+   (for [{:keys [sheet chart-xml] :as chart} chart-data
+         :let [sheet-obj (.getSheet workbook sheet)]
+         :when sheet-obj] ;;; if sheet-obj is nil, this chart has already been added back
+     (assoc chart :chart-xml (expand-xml-str sheet-obj src-sheet dst-sheets chart-xml)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

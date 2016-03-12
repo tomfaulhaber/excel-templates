@@ -340,6 +340,8 @@ If there are any nil values in the source collection, the corresponding cells ar
   (when-let [charts (filter #(= src-sheet (:sheet %)) chart-data)]
     (doseq [{:keys [chart-location chart-xml chart-sheet?]} charts
             :when (not chart-sheet?)]
+      (when-not chart-location
+        (throw (RuntimeException. "The POI library only supports TwoCellAnchors. See https://github.com/tomfaulhaber/excel-templates/issues/29 for information and workaround.")))
       (let [target (.getSheet workbook dst-sheet)
             new-xml (c/chart-change-sheet target src-index target-loc chart-xml)
             drawing (.createDrawingPatriarch target)
@@ -365,9 +367,12 @@ If there are any nil values in the source collection, the corresponding cells ar
         (let [workbook (XSSFWorkbook. package)]
           (loop [src-index 0
                  src-sheets (get-sheet-names workbook)
-                 dst-index 0]
+                 dst-index 0
+                 chart-data chart-data
+                 seen-sheets #{}]
             (when src-sheets
-              (let [[src-sheet & src-sheets] src-sheets]
+              (let [[src-sheet & src-sheets] src-sheets
+                    seen-sheets (conj seen-sheets src-sheet)]
                 (if (contains? replacements src-sheet)
                   (let [dst-sheets (map :sheet-name (replacements src-sheet))
                         self-offset (.indexOf dst-sheets src-sheet)
@@ -382,8 +387,6 @@ If there are any nil values in the source collection, the corresponding cells ar
 
                     ;; Update any worksheets that point at this one
                     ;; Currently this does charts only
-                    ;; TODO: this won't work when the charts are on sheets after this one,
-                    ;; because they haven't been added back in yet. Hmmm.
                     (when (and (seq dst-sheets)
                                (not (and replace-self?
                                          (= 1 (count dst-sheets)))))
@@ -392,12 +395,20 @@ If there are any nil values in the source collection, the corresponding cells ar
                                 :when (not (these (.getSheetName sheet)))]
                           (c/expand-charts sheet src-sheet dst-sheets))))
 
-                    (when-not replace-self?
-                      (remove-sheet! workbook src-sheet))
-                    (recur (inc src-index) src-sheets (+ dst-index (count dst-sheets))))
+                    (let [new-chart-data (c/expand-chart-data
+                                          workbook src-sheet dst-sheets
+                                          (filter #(not (seen-sheets (:sheet %))) chart-data))]
+                      (when-not replace-self?
+                        (remove-sheet! workbook src-sheet))
+                      (recur (inc src-index)
+                             src-sheets
+                             (+ dst-index (count dst-sheets))
+                             new-chart-data
+                             seen-sheets)))
                   (do
+                    #break (nil? nil)
                     (insert-charts workbook chart-data src-sheet src-sheet src-index dst-index)
-                    (recur (inc src-index) src-sheets (inc dst-index)))))))
+                    (recur (inc src-index) src-sheets (inc dst-index) chart-data seen-sheets))))))
 
           (save-workbook! workbook temp-file)))
       (io/copy temp-file excel-file)
