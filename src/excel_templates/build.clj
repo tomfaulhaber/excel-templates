@@ -1,6 +1,7 @@
 (ns excel-templates.build
   (:import [java.io File FileOutputStream FileInputStream]
            [java.util Calendar]
+           [java.util.zip ZipEntry ZipFile ZipOutputStream]
            [org.apache.poi.openxml4j.opc OPCPackage]
            [org.apache.poi.ss.usermodel Cell Row DateUtil WorkbookFactory]
            [org.apache.poi.xssf.streaming SXSSFWorkbook]
@@ -9,6 +10,8 @@
             [clojure.java.shell :as sh]
             [clojure.pprint :as pp]
             [clojure.set :as set]
+            [clojure.string :as str]
+            [clojure.xml :as xml]
             [excel-templates.charts :as c]
             [excel-templates.formulas :as fo]))
 
@@ -268,34 +271,119 @@ If there are any nil values in the source collection, the corresponding cells ar
   (for [index (range (.getNumberOfSheets wb))]
     (.getSheetAt wb index)))
 
+(defn extract-charts
+  "Get all the charts on the various sheets and return their XML as a dictionary
+  keyed by sheet name. Then, delete the charts from the original workbook.
+
+  This is necessary because POI has a bug cloning sheets with charts on them.
+  See https://github.com/tomfaulhaber/excel-templates/issues/7 for info."
+  [workbook]
+  (->> workbook
+       get-sheets
+       (mapcat c/get-chart-data)))
+
+(defn charts-from-file
+  "Extract the chart info from a file"
+  [excel-file]
+  (with-open [package (OPCPackage/open excel-file)]
+    (let [workbook (XSSFWorkbook. package)]
+      (extract-charts workbook))))
+
+(defn xml-to-str
+  "Generate an XML string from parsed XML using clojure.xml"
+  [xml-data]
+  (-> (with-out-str (-> xml-data xml/emit))
+      (str/replace #"^.*\n" "")
+      (str/replace #"(\r?\n|\r)" "")))
+
+(defn filter-zip-file
+  "Filter zip file copies the zip file deleting and modifying the entries according to the rules
+  provided"
+  [input-file output-file rules]
+  (let [buf-size 65536
+        buf (byte-array buf-size)]
+    (with-open [zip-file (ZipFile. input-file)
+                output (ZipOutputStream. (io/output-stream output-file))]
+      (doseq [entry (enumeration-seq (.entries zip-file))
+              :let [entry-name (.getName entry)
+                    rule (rules entry-name)
+                    new-entry (ZipEntry. (or (:rename rule) entry-name))]]
+        (when-not (:delete rule)
+          (with-open [entry-data (.getInputStream zip-file entry)]
+            (if-let [edit-fn (:edit rule)]
+              (let [xml-data (xml/parse entry-data)
+                    new-data (edit-fn xml-data)
+                    data-str (xml-to-str new-data)
+                    bytes (.getBytes data-str "UTF-8")
+                    len (alength bytes)]
+                (.putNextEntry output new-entry)
+                (.write output bytes 0 len)
+                (.closeEntry output))
+              (do
+                (.putNextEntry output new-entry)
+                (loop []
+                 (let [bytes-read (.read entry-data buf 0 buf-size)]
+                   (when (pos? bytes-read)
+                     (.write output buf 0 bytes-read)
+                     (recur))))
+                (.closeEntry output)))))))))
+
+
+(defmacro memfnx
+  "Like memfn, but gives n-args arguments so I don't have to name them."
+  [method n-args]
+  `(memfn ~method ~@(repeatedly n-args #(gensym "arg"))))
+
+(defn insert-charts
+  "Add the charts back into the sheets"
+  [workbook chart-data src-sheet dst-sheet src-index target-loc]
+  (when-let [charts (filter #(= src-sheet (:sheet %)) chart-data)]
+    (doseq [{:keys [chart-location chart-xml chart-sheet?]} charts
+            :when (not chart-sheet?)]
+      (when-not chart-location
+        (throw (RuntimeException. "The POI library only supports TwoCellAnchors. See https://github.com/tomfaulhaber/excel-templates/issues/29 for information and workaround.")))
+      (let [target (.getSheet workbook dst-sheet)
+            new-xml (c/chart-change-sheet target src-index target-loc chart-xml)
+            drawing (.createDrawingPatriarch target)
+            anchor-points (map #(get-in chart-location %)
+                               [[:from :col-off] [:from :row-off]
+                                [:to   :col-off] [:to   :row-off]
+                                [:from :col    ] [:from :row    ]
+                                [:to   :col    ] [:to   :row    ]])
+            anchor (apply (memfnx createAnchor 8) drawing anchor-points)
+            new-chart (.createChart drawing anchor)]
+        (c/set-xml new-chart new-xml)))))
+
 ;; TODO validate that only valid templates are named in replacements.
 ;; use all-sheet-names and (keys replacements)
 
 (defn create-missing-sheets!
   "Updates the excel file with any missing sheets, referred to by :sheet-name
   in the replacements."
-  [excel-file replacements]
-  (let [temp-file (File/createTempFile "add-sheets" ".xlsx")]
+  [excel-file replacements chart-data]
+  (let [temp-file (File/createTempFile "excel-add-sheets" ".xlsx")]
     (try
       (with-open [package (OPCPackage/open excel-file)]
         (let [workbook (XSSFWorkbook. package)]
           (loop [src-index 0
                  src-sheets (get-sheet-names workbook)
-                 dst-index 0]
+                 dst-index 0
+                 chart-data chart-data
+                 seen-sheets #{}]
             (when src-sheets
-              (let [[src-sheet & src-sheets] src-sheets]
+              (let [[src-sheet & src-sheets] src-sheets
+                    seen-sheets (conj seen-sheets src-sheet)]
                 (if (contains? replacements src-sheet)
                   (let [dst-sheets (map :sheet-name (replacements src-sheet))
                         self-offset (.indexOf dst-sheets src-sheet)
                         replace-self? (>= self-offset 0)]
                     (doseq [[dst-offset dst-sheet] (map-indexed vector dst-sheets)
                             :let [target-loc (+ dst-index dst-offset
-                                                (if (and replace-self? (< self-offset dst-offset))
+                                                (if (and replace-self? (<= self-offset dst-offset))
                                                   0 1))]]
                       (when (not= src-sheet dst-sheet)
-                        (clone-sheet! workbook src-sheet dst-sheet target-loc)
-                        ;;(c/change-sheet (.getSheet workbook dst-sheet) src-index target-loc)
-                        ))
+                        (clone-sheet! workbook src-sheet dst-sheet target-loc))
+                      (insert-charts workbook chart-data src-sheet dst-sheet src-index target-loc))
 
                     ;; Update any worksheets that point at this one
                     ;; Currently this does charts only
@@ -307,10 +395,20 @@ If there are any nil values in the source collection, the corresponding cells ar
                                 :when (not (these (.getSheetName sheet)))]
                           (c/expand-charts sheet src-sheet dst-sheets))))
 
-                    (when-not replace-self?
-                      (remove-sheet! workbook src-sheet))
-                    (recur (inc src-index) src-sheets (+ dst-index (count dst-sheets))))
-                  (recur (inc src-index) src-sheets (inc dst-index))))))
+                    (let [new-chart-data (c/expand-chart-data
+                                          workbook src-sheet dst-sheets
+                                          (filter #(not (seen-sheets (:sheet %))) chart-data))]
+                      (when-not replace-self?
+                        (remove-sheet! workbook src-sheet))
+                      (recur (inc src-index)
+                             src-sheets
+                             (+ dst-index (count dst-sheets))
+                             new-chart-data
+                             seen-sheets)))
+                  (do
+                    #break (nil? nil)
+                    (insert-charts workbook chart-data src-sheet src-sheet src-index dst-index)
+                    (recur (inc src-index) src-sheets (inc dst-index) chart-data seen-sheets))))))
 
           (save-workbook! workbook temp-file)))
       (io/copy temp-file excel-file)
@@ -381,6 +479,7 @@ If there are any nil values in the source collection, the corresponding cells ar
   "Build a report based on a spreadsheet template"
   [template-file output-file replacements]
   (let [tmpfile (File/createTempFile "excel-output" ".xlsx")
+        tmpcopy0 (File/createTempFile "excel-template-firstcopy" ".xlsx")
         tmpcopy (File/createTempFile "excel-template-copy" ".xlsx")
         replacements (normalize replacements)]
     (try
@@ -388,8 +487,10 @@ If there are any nil values in the source collection, the corresponding cells ar
       ;; though it's our input file. That's annoying from a source code
       ;; control perspective.
       (with-open [template (get-template template-file)]
-        (io/copy template tmpcopy))
-      (create-missing-sheets! tmpcopy replacements)
+        (io/copy template tmpcopy0))
+      (let [chart-data (charts-from-file tmpcopy0)]
+        (filter-zip-file tmpcopy0 tmpcopy (c/chart-removal-rules chart-data))
+        (create-missing-sheets! tmpcopy replacements chart-data))
       (build-base-output tmpcopy tmpfile)
       (let [replacements (replacements-by-sheet-name replacements)
             translation-table (fo/build-translation-tables replacements)
@@ -406,7 +507,8 @@ If there are any nil values in the source collection, the corresponding cells ar
                   (let [src-sheet (.getSheetAt template sheet-num)
                         sheet-name (.getSheetName src-sheet)
                         sheet-data (or (get replacements sheet-name)
-                                       (get replacements sheet-num) {})
+                                       (get replacements sheet-num)
+                                       {})
                         nrows (inc (.getLastRowNum src-sheet))
                         src-has-formula? (or (has-formula? src-sheet)
                                              (c/has-chart? src-sheet))
@@ -449,6 +551,7 @@ If there are any nil values in the source collection, the corresponding cells ar
                 (doseq [f intermediate-files] (io/delete-file f)))))))
       (finally
         (io/delete-file tmpfile)
+        (io/delete-file tmpcopy0)
         (io/delete-file tmpcopy)))))
 
 (defn render-to-stream

@@ -1,5 +1,6 @@
 (ns excel-templates.charts
-  (:import [org.openxmlformats.schemas.drawingml.x2006.chart CTChart$Factory])
+  (:import [org.apache.poi.xssf.usermodel XSSFChartSheet]
+           [org.openxmlformats.schemas.drawingml.x2006.chart CTChart$Factory])
   (:require [clojure.data.zip :as zf]
             [clojure.data.zip.xml :as zx]
             [clojure.set :as set]
@@ -15,6 +16,11 @@
 ;;; we need to transform.
 
 ;;; Manipulation of the POI objects for charts
+
+(defmacro mjuxt
+  "Like juxt, but for Java methods"
+  [& methods]
+  `(juxt ~@(map #(list 'memfn %) methods)))
 
 ;;; TODO createDrawingPatriarch should be replaced by getDrawingPatriarch when that's available in POI 3.12
 (defn get-charts
@@ -179,6 +185,21 @@
   (println "px:" x)
   x)
 
+(defn expand-xml-str
+  "Replace any series a chart that references a sheet that's being cloned to point to all
+   the clones. "
+  [sheet src-sheet dst-sheets xml-str]
+  (->> xml-str
+       parse-xml
+       (expand-all-series sheet src-sheet dst-sheets)
+       zip/root
+       zip/xml-zip
+       (reindex-series :c:idx (range))
+       zip/root
+       zip/xml-zip
+       (reindex-series :c:order (range))
+       emit-xml))
+
 (defn expand-charts
   "Replace any series in charts on the sheet that reference src-sheet with multiple series
    each referencing a single element of dst-sheets"
@@ -186,27 +207,12 @@
   (doseq [chart (get-charts sheet)]
     (->> chart
          get-xml
-         parse-xml
-         (expand-all-series sheet src-sheet dst-sheets)
-         zip/root
-         zip/xml-zip
-         (reindex-series :c:idx (range))
-         zip/root
-         zip/xml-zip
-         (reindex-series :c:order (range))
-         emit-xml
+         (expand-xml-str sheet src-sheet dst-sheets)
          (set-xml chart))))
-
-;;; NOTE: Everything below here is for relocating charts when sheets are
-;;; cloned, but we're not using this right now because POI has some
-;;; fundamental problems with cloning sheets with drawing objects on them.
-;;; I think I can work around this, but I don't have time right now.
 
 ;;; When we duplicate a sheet with charts on it, we need to make sure
 ;;; that any charts on that sheet point to the new sheet in any places
 ;;; where they were pointing to the base sheet
-
-
 
 (defn chart-change-sheet
   "Handle a single chart that was duplicated from an old sheet to a new sheet"
@@ -214,7 +220,7 @@
   (->> chart-xml parse-xml (relocate-xml sheet old-index new-index) emit-xml))
 
 (defn change-sheet
-  "Update any reference in the charts on this sheet that point to the base sheet to
+  "Update any reference in the charts on this sheet that points to the base sheet to
    point to this sheet"
   [sheet old-index new-index]
   (println (str "Changing sheet " (.getSheetName sheet) "(" (-> sheet .getWorkbook (.getSheetIndex sheet)) ") from " old-index " to " new-index))
@@ -223,16 +229,30 @@
     (println "found chart")
     (->> chart get-xml (chart-change-sheet sheet old-index new-index) (set-xml chart))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; The following code represents an error in thinking on my part, I think
-;; I'm leaving it here until I'm sure.
-
 ;;; Code for copying charts when we're duplicating a sheet
+;;; Because POI can't clone a sheet with charts on it, we have to do the
+;;; following:
+;;; 1) Get the data about all the charts that are on worksheets
+;;; 2) Delete charts from the worksheets (leave charts on the chartsheets, because they're different)
+;;; 3) Rename the charts on chartsheets to be chart1, chart2, etc. because of the way POI creates
+;;;    new charts
+;;; 4) Add the charts back onto the sheets after they've been cloned (we do all worksheets because
+;;;    it's easier that restricting to only cloned ones).
+;;; 5) Make any charts that point to the new cloned charts have the right references
+;;; 6) Do the same for all the saved charts since some of them won't have been added back into the
+;;;    sheets yet.
+;;;
+;;; The logic to do this is split between here and create-missing-sheets in build.clj
+
+(defn chart-sheet?
+  "Return true if this sheet is a chart sheet"
+  [sheet]
+  (instance? XSSFChartSheet sheet))
 
 (defn anchors-by-id
   "Gets a map of anchor objects by ID that show where the graphic with that ID is on the sheet"
   [sheet]
-  (let [anchors (-> sheet .createDrawingPatriarch bean :CTDrawing .getTwoCellAnchorList)]
+  (let [anchors (-> sheet .createDrawingPatriarch .getCTDrawing .getTwoCellAnchorList)]
     (into {} (for [anchor anchors]
                [(-> anchor .getGraphicFrame .getGraphic .getGraphicData .getDomNode
                     .getChildNodes (.item 0) (.getAttribute "r:id"))
@@ -260,6 +280,142 @@
                    (.getColOff to)   (.getRowOff to)
                    (.getCol from)    (.getRow from)
                    (.getCol to)      (.getRow to))))
+
+
+(defn get-anchor-location
+  "Get the location info from an anchor so we can create a new one later"
+  [anchor]
+  (when anchor
+    (zipmap [:from :to]
+            (map (comp (partial zipmap [:col-off :row-off :col :row])
+                       (mjuxt getColOff getRowOff getCol getRow))
+                 ((mjuxt getFrom getTo) anchor)))))
+
+(defn part-path
+  "Get the path to this part for this object in the zip file"
+  [part]
+  (-> part .getPackagePart .getPartName .getName (subs 1)))
+
+(defn rels-path
+  "Get the path to the relationship definitions for this object in the zip file"
+  [part]
+  (let [[_ head tail] (re-matches #"^(.*)/([^/]+)" (part-path part))]
+    (str head "/_rels/" tail ".rels")))
+
+(defn get-chart-data
+  "Get all the data the we need to delete and then recreate the charts for this sheet"
+  [sheet]
+  (let [anchors (anchors-by-id sheet)]
+    (for [chart (get-charts sheet)
+          :let [drawing (.createDrawingPatriarch sheet)
+                chart-id (get-part-id sheet chart)]]
+      {:sheet          (.getSheetName sheet)
+       :chart-sheet?   (chart-sheet? sheet)
+       :chart-path     (part-path chart)
+       :drawing-path   (part-path drawing)
+       :drawing-rels   (rels-path drawing)
+       :chart-id       chart-id
+       :chart-location (get-anchor-location (anchors chart-id))
+       :chart-xml      (get-xml chart)})))
+
+(defn chart-sheets
+  "filter the chart data for charts from chart sheets only"
+  [chart-data]
+  (filter :chart-sheet? chart-data))
+
+(defn work-sheets
+  "filter the chart data for charts from worksheets only"
+  [chart-data]
+  (filter (complement :chart-sheet?) chart-data))
+
+(defn remove-charts
+  "Returns a map of chart names to a map with :delete set to true. This will cause the chart objects to be
+  dropped."
+  [chart-data]
+  (into {}
+        (for [chart (work-sheets chart-data)] [(:chart-path chart) {:delete true}])))
+
+(defn remove-drawing-rels
+  "Returns a map of relationship sheets to a function that will remove the correct relationships on each one"
+  [chart-data]
+  (let [ids-by-rels (fo/map-values
+                     #(set (map :chart-id %))
+                     (group-by :drawing-rels (work-sheets chart-data)))]
+    (fo/map-values
+     (fn [id-set]
+       {:edit
+        (fn [xml-data]
+           (assoc xml-data :content (filter #(not (id-set (get-in % [:attrs :Id])))
+                                            (:content xml-data))))})
+     ids-by-rels)))
+
+(defn remove-anchors
+  "Returns a map of drawing sheets to functions that will move the anchors corresponding to the charts"
+  [chart-data]
+  (let [ids-by-drawings (fo/map-values
+                         #(set (map :chart-id %))
+                         (group-by :drawing-path (work-sheets chart-data)))]
+    (fo/map-values
+     (fn [id-set]
+       {:edit
+        (fn [xml-data]
+           (loop [data xml-data]
+             (if-let [new-data (zx/xml1->
+                                (zip/xml-zip data)
+                                zf/descendants
+                                (zx/tag= :c:chart)
+                                #(boolean (id-set (zx/attr % :r:id)))
+                                zf/ancestors
+                                (zx/tag= :xdr:twoCellAnchor)
+                                zip/remove
+                                zip/root)]
+               (recur new-data)
+               data)))})
+     ids-by-drawings)))
+
+(defn drawing-rel
+  "Change a chart reference to be relative to the drawing object"
+  [link]
+  (.replaceFirst link "^xl/" "../"))
+
+(defn renumber-chart-sheets
+  "Returns a map with instructions about how to renumber the charts on chart sheets so that they
+   a 1..n with no holes so that POI can re-add the charts on worksheets correctly."
+  [chart-data]
+  (let [chart-sheet-data (->> chart-data
+                              (filter :chart-sheet?)
+                              (map-indexed #(assoc %2 :new-chart-path
+                                                   (format "xl/charts/chart%d.xml" (inc %1)))))]
+    (apply
+     merge
+     (for [c chart-sheet-data
+           :let [path (:chart-path c)
+                 rel-path (drawing-rel path)
+                 new-path (:new-chart-path c)
+                 rels (:drawing-rels c)]]
+       {path  {:rename new-path}
+        rels  {:edit (fn [xml-data]
+                       (assoc xml-data
+                              :content (map #(if (= rel-path (get-in % [:attrs :Target]))
+                                               (assoc-in % [:attrs :Target] (drawing-rel new-path))
+                                               %)
+                                            (:content xml-data))))}}))))
+
+(defn chart-removal-rules
+  "Combine all the rules to remove charts from this workbook"
+  [chart-data]
+  (apply merge
+         (map #(% chart-data)
+              [remove-charts remove-drawing-rels remove-anchors renumber-chart-sheets])))
+
+(defn expand-chart-data
+  "Expand the xml charts that we've captured if they have references to sheets that are being cloned"
+  [workbook src-sheet dst-sheets chart-data]
+  (doall
+   (for [{:keys [sheet chart-xml] :as chart} chart-data
+         :let [sheet-obj (.getSheet workbook sheet)]
+         :when sheet-obj] ;;; if sheet-obj is nil, this chart has already been added back
+     (assoc chart :chart-xml (expand-xml-str sheet-obj src-sheet dst-sheets chart-xml)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
