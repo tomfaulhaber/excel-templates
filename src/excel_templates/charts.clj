@@ -1,5 +1,6 @@
 (ns excel-templates.charts
-  (:import [org.openxmlformats.schemas.drawingml.x2006.chart CTChart$Factory])
+  (:import [org.apache.poi.xssf.usermodel XSSFChartSheet]
+           [org.openxmlformats.schemas.drawingml.x2006.chart CTChart$Factory])
   (:require [clojure.data.zip :as zf]
             [clojure.data.zip.xml :as zx]
             [clojure.set :as set]
@@ -228,11 +229,12 @@
     (println "found chart")
     (->> chart get-xml (chart-change-sheet sheet old-index new-index) (set-xml chart))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; The following code represents an error in thinking on my part, I think
-;; I'm leaving it here until I'm sure.
-
 ;;; Code for copying charts when we're duplicating a sheet
+
+(defn chart-sheet?
+  "Return true if this sheet is a chart sheet"
+  [sheet]
+  (instance? XSSFChartSheet sheet))
 
 (defn anchors-by-id
   "Gets a map of anchor objects by ID that show where the graphic with that ID is on the sheet"
@@ -270,10 +272,11 @@
 (defn get-anchor-location
   "Get the location info from an anchor so we can create a new one later"
   [anchor]
-  (zipmap [:from :to]
-          (map (comp (partial zipmap [:col-off :row-off :col :row])
-                     (mjuxt getColOff getRowOff getCol getRow))
-               ((mjuxt getFrom getTo) anchor))))
+  (when anchor
+    (zipmap [:from :to]
+            (map (comp (partial zipmap [:col-off :row-off :col :row])
+                       (mjuxt getColOff getRowOff getCol getRow))
+                 ((mjuxt getFrom getTo) anchor)))))
 
 (defn part-path
   "Get the path to this part for this object in the zip file"
@@ -294,6 +297,7 @@
           :let [drawing (.createDrawingPatriarch sheet)
                 chart-id (get-part-id sheet chart)]]
       {:sheet          (.getSheetName sheet)
+       :chart-sheet?   (chart-sheet? sheet)
        :chart-path     (part-path chart)
        :drawing-path   (part-path drawing)
        :drawing-rels   (rels-path drawing)
@@ -301,31 +305,35 @@
        :chart-location (get-anchor-location (anchors chart-id))
        :chart-xml      (get-xml chart)})))
 
-(defn rels-for-object
-  "Returns a set of relationship Ids that pertain to this object"
-  [chart-data object-name]
-  (set (map :chart-id
-            (filter #(= object-name (:drawing-rels %))
-                    (apply concat (vals chart-data))))))
+(defn chart-sheets
+  "filter the chart data for charts from chart sheets only"
+  [chart-data]
+  (filter :chart-sheet? chart-data))
+
+(defn work-sheets
+  "filter the chart data for charts from worksheets only"
+  [chart-data]
+  (filter (complement :chart-sheet?) chart-data))
 
 (defn remove-charts
-  "Returns a map of chart names to the keyword :delete. This will cause the chart objects to be
+  "Returns a map of chart names to a map with :delete set to true. This will cause the chart objects to be
   dropped."
   [chart-data]
-  (zipmap (map :chart-path (apply concat (vals chart-data)))
-          (repeat :delete)))
+  (into {}
+        (for [chart (work-sheets chart-data)] [(:chart-path chart) {:delete true}])))
 
 (defn remove-drawing-rels
   "Returns a map of relationship sheets to a function that will remove the correct relationships on each one"
   [chart-data]
   (let [ids-by-rels (fo/map-values
                      #(set (map :chart-id %))
-                     (group-by :drawing-rels (apply concat (vals chart-data))))]
+                     (group-by :drawing-rels (work-sheets chart-data)))]
     (fo/map-values
      (fn [id-set]
-       (fn [xml-data]
-         (assoc xml-data :content (filter #(not (id-set (get-in % [:attrs :Id])))
-                                          (:content xml-data)))))
+       {:edit
+        (fn [xml-data]
+           (assoc xml-data :content (filter #(not (id-set (get-in % [:attrs :Id])))
+                                            (:content xml-data))))})
      ids-by-rels)))
 
 (defn remove-anchors
@@ -333,30 +341,59 @@
   [chart-data]
   (let [ids-by-drawings (fo/map-values
                          #(set (map :chart-id %))
-                         (group-by :drawing-path (apply concat (vals chart-data))))]
+                         (group-by :drawing-path (work-sheets chart-data)))]
     (fo/map-values
      (fn [id-set]
-       (fn [xml-data]
-         (loop [data xml-data]
-           (if-let [new-data (zx/xml1->
-                              (zip/xml-zip data)
-                              zf/descendants
-                              (zx/tag= :c:chart)
-                              #(boolean (id-set (zx/attr % :r:id)))
-                              zf/ancestors
-                              (zx/tag= :xdr:twoCellAnchor)
-                              zip/remove
-                              zip/root)]
-             (recur new-data)
-             data))))
+       {:edit
+        (fn [xml-data]
+           (loop [data xml-data]
+             (if-let [new-data (zx/xml1->
+                                (zip/xml-zip data)
+                                zf/descendants
+                                (zx/tag= :c:chart)
+                                #(boolean (id-set (zx/attr % :r:id)))
+                                zf/ancestors
+                                (zx/tag= :xdr:twoCellAnchor)
+                                zip/remove
+                                zip/root)]
+               (recur new-data)
+               data)))})
      ids-by-drawings)))
+
+(defn drawing-rel
+  "Change a chart reference to be relative to the drawing object"
+  [link]
+  (.replaceFirst link "^xl/" "../"))
+
+(defn renumber-chart-sheets
+  "Returns a map with instructions about how to renumber the charts on chart sheets so that they
+   a 1..n with no holes so that POI can re-add the charts on worksheets correctly."
+  [chart-data]
+  (let [chart-sheet-data (->> chart-data
+                              (filter :chart-sheet?)
+                              (map-indexed #(assoc %2 :new-chart-path
+                                                   (format "xl/charts/chart%d.xml" (inc %1)))))]
+    (apply
+     merge
+     (for [c chart-sheet-data
+           :let [path (:chart-path c)
+                 rel-path (drawing-rel path)
+                 new-path (:new-chart-path c)
+                 rels (:drawing-rels c)]]
+       {path  {:rename new-path}
+        rels  {:edit (fn [xml-data]
+                       (assoc xml-data
+                              :content (map #(if (= rel-path (get-in % [:attrs :Target]))
+                                               (assoc-in % [:attrs :Target] (drawing-rel new-path))
+                                               %)
+                                            (:content xml-data))))}}))))
 
 (defn chart-removal-rules
   "Combine all the rules to remove charts from this workbook"
   [chart-data]
   (apply merge
-         ((juxt remove-charts remove-drawing-rels remove-anchors)
-          chart-data)))
+         (map #(% chart-data)
+              [remove-charts remove-drawing-rels remove-anchors renumber-chart-sheets])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

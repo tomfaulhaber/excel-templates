@@ -5,7 +5,7 @@
            [org.apache.poi.openxml4j.opc OPCPackage]
            [org.apache.poi.ss.usermodel Cell Row DateUtil WorkbookFactory]
            [org.apache.poi.xssf.streaming SXSSFWorkbook]
-           [org.apache.poi.xssf.usermodel XSSFChartSheet XSSFWorkbook])
+           [org.apache.poi.xssf.usermodel XSSFWorkbook])
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as sh]
             [clojure.pprint :as pp]
@@ -271,11 +271,6 @@ If there are any nil values in the source collection, the corresponding cells ar
   (for [index (range (.getNumberOfSheets wb))]
     (.getSheetAt wb index)))
 
-(defn chart-sheet?
-  "Return true if this sheet is a chart sheet"
-  [sheet]
-  (instance? XSSFChartSheet sheet))
-
 (defn extract-charts
   "Get all the charts on the various sheets and return their XML as a dictionary
   keyed by sheet name. Then, delete the charts from the original workbook.
@@ -283,12 +278,9 @@ If there are any nil values in the source collection, the corresponding cells ar
   This is necessary because POI has a bug cloning sheets with charts on them.
   See https://github.com/tomfaulhaber/excel-templates/issues/7 for info."
   [workbook]
-  (into
-   {}
-   (for [sheet (filter (complement chart-sheet?)
-                       (get-sheets workbook))]
-     [(.getSheetName sheet)
-      (c/get-chart-data sheet)])))
+  (->> workbook
+       get-sheets
+       (mapcat c/get-chart-data)))
 
 (defn charts-from-file
   "Extract the chart info from a file"
@@ -314,10 +306,11 @@ If there are any nil values in the source collection, the corresponding cells ar
                 output (ZipOutputStream. (io/output-stream output-file))]
       (doseq [entry (enumeration-seq (.entries zip-file))
               :let [entry-name (.getName entry)
-                    new-entry (ZipEntry. entry-name)]]
-        (when-not (= :delete (rules entry-name))
+                    rule (rules entry-name)
+                    new-entry (ZipEntry. (or (:rename rule) entry-name))]]
+        (when-not (:delete rule)
           (with-open [entry-data (.getInputStream zip-file entry)]
-            (if-let [edit-fn (rules entry-name)]
+            (if-let [edit-fn (:edit rule)]
               (let [xml-data (xml/parse entry-data)
                     new-data (edit-fn xml-data)
                     data-str (xml-to-str new-data)
@@ -341,6 +334,24 @@ If there are any nil values in the source collection, the corresponding cells ar
   [method n-args]
   `(memfn ~method ~@(repeatedly n-args #(gensym "arg"))))
 
+(defn insert-charts
+  "Add the charts back into the sheets"
+  [workbook chart-data src-sheet dst-sheet src-index target-loc]
+  (when-let [charts (filter #(= src-sheet (:sheet %)) chart-data)]
+    (doseq [{:keys [chart-location chart-xml chart-sheet?]} charts
+            :when (not chart-sheet?)]
+      (let [target (.getSheet workbook dst-sheet)
+            new-xml (c/chart-change-sheet target src-index target-loc chart-xml)
+            drawing (.createDrawingPatriarch target)
+            anchor-points (map #(get-in chart-location %)
+                               [[:from :col-off] [:from :row-off]
+                                [:to   :col-off] [:to   :row-off]
+                                [:from :col    ] [:from :row    ]
+                                [:to   :col    ] [:to   :row    ]])
+            anchor (apply (memfnx createAnchor 8) drawing anchor-points)
+            new-chart (.createChart drawing anchor)]
+        (c/set-xml new-chart new-xml)))))
+
 ;; TODO validate that only valid templates are named in replacements.
 ;; use all-sheet-names and (keys replacements)
 
@@ -363,29 +374,16 @@ If there are any nil values in the source collection, the corresponding cells ar
                         replace-self? (>= self-offset 0)]
                     (doseq [[dst-offset dst-sheet] (map-indexed vector dst-sheets)
                             :let [target-loc (+ dst-index dst-offset
-                                                (if (and replace-self? (< self-offset dst-offset))
+                                                (if (and replace-self? (<= self-offset dst-offset))
                                                   0 1))]]
                       (when (not= src-sheet dst-sheet)
                         (clone-sheet! workbook src-sheet dst-sheet target-loc))
-
-                      ;; Add the charts back into the sheets
-                      (when-let [charts (chart-data src-sheet)]
-                        (doseq [{:keys [chart-location chart-xml]} charts]
-                          (let [target (.getSheet workbook dst-sheet)
-                                new-xml (c/chart-change-sheet target src-index target-loc chart-xml)
-                                drawing (.createDrawingPatriarch target)
-                                anchor-points (map #(get-in chart-location %)
-                                                   [[:from :col-off] [:from :row-off]
-                                                    [:to   :col-off] [:to   :row-off]
-                                                    [:from :col    ] [:from :row    ]
-                                                    [:to   :col    ] [:to   :row    ]])
-                                anchor (apply (memfnx createAnchor 8) drawing anchor-points)
-                                new-chart (.createChart drawing anchor)]
-                            (c/set-xml chart new-xml)))))
-
+                      (insert-charts workbook chart-data src-sheet dst-sheet src-index target-loc))
 
                     ;; Update any worksheets that point at this one
                     ;; Currently this does charts only
+                    ;; TODO: this won't work when the charts are on sheets after this one,
+                    ;; because they haven't been added back in yet. Hmmm.
                     (when (and (seq dst-sheets)
                                (not (and replace-self?
                                          (= 1 (count dst-sheets)))))
@@ -397,7 +395,9 @@ If there are any nil values in the source collection, the corresponding cells ar
                     (when-not replace-self?
                       (remove-sheet! workbook src-sheet))
                     (recur (inc src-index) src-sheets (+ dst-index (count dst-sheets))))
-                  (recur (inc src-index) src-sheets (inc dst-index))))))
+                  (do
+                    (insert-charts workbook chart-data src-sheet src-sheet src-index dst-index)
+                    (recur (inc src-index) src-sheets (inc dst-index)))))))
 
           (save-workbook! workbook temp-file)))
       (io/copy temp-file excel-file)
