@@ -285,9 +285,17 @@ If there are any nil values in the source collection, the corresponding cells ar
 (defn charts-from-file
   "Extract the chart info from a file"
   [excel-file]
-  (with-open [package (OPCPackage/open excel-file)]
-    (let [workbook (XSSFWorkbook. package)]
-      (extract-charts workbook))))
+  ;; Owing to the genius that is POI, looking at the file to get the
+  ;; charts out can corrupt the file. Rather than fight this, we just
+  ;; copy the file before manipulating it and then throw away the copy.
+  (let [temp-file (File/createTempFile "excel-template-chart" ".xlsx")]
+    (try
+      (io/copy excel-file temp-file)
+      (with-open [package (OPCPackage/open temp-file)]
+       (let [workbook (XSSFWorkbook. package)]
+         (extract-charts workbook)))
+      (finally
+        (io/delete-file temp-file)))))
 
 (defn xml-to-str
   "Generate an XML string from parsed XML using clojure.xml"
