@@ -406,7 +406,6 @@ If there are any nil values in the source collection, the corresponding cells ar
                              new-chart-data
                              seen-sheets)))
                   (do
-                    #break (nil? nil)
                     (insert-charts workbook chart-data src-sheet src-sheet src-index dst-index)
                     (recur (inc src-index) src-sheets (inc dst-index) chart-data seen-sheets))))))
 
