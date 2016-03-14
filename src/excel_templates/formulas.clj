@@ -141,11 +141,14 @@
     (let [first-src-row (.getFirstRow ptg)
           first-src-col (.getFirstColumn ptg)
           first-abs?    (not (.isFirstRowRelative ptg))
-          [first-row first-col] (src->dst translation-table sheet [first-src-row first-src-col]  target-cell false first-abs?)
-          last-src-row (.getLastRow ptg)
-          last-src-col (.getLastColumn ptg)
-          last-abs?    (not (.isLastRowRelative ptg))
-          [last-row last-col] (src->dst translation-table sheet [last-src-row last-src-col]  target-cell true last-abs?)]
+          last-src-row  (.getLastRow ptg)
+          last-src-col  (.getLastColumn ptg)
+          last-abs?     (not (.isLastRowRelative ptg))
+          adjust-first? (and (not first-abs?) (not= first-src-col last-src-col))
+          [first-row first-col] (src->dst translation-table sheet [first-src-row first-src-col]
+                                          target-cell adjust-first? first-abs?)
+          [last-row last-col]   (src->dst translation-table sheet [last-src-row last-src-col]
+                                          target-cell true last-abs?)]
       (doto ptg
         (.setFirstRow first-row)
         (.setFirstColumn first-col)
