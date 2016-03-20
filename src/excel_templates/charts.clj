@@ -1,11 +1,13 @@
 (ns excel-templates.charts
-  (:import [org.apache.poi.xssf.usermodel XSSFChartSheet]
+  (:import [org.apache.commons.lang3 StringEscapeUtils]
+           [org.apache.poi.xssf.usermodel XSSFChartSheet]
            [org.openxmlformats.schemas.drawingml.x2006.chart CTChart$Factory])
   (:require [clojure.data.zip :as zf]
             [clojure.data.zip.xml :as zx]
             [clojure.set :as set]
             [clojure.string :as str]
             [clojure.xml :as xml]
+            [clojure.walk :as walk]
             [clojure.zip :as zip]
             [excel-templates.formulas :as fo]))
 
@@ -55,10 +57,22 @@
       xml/parse
       zip/xml-zip))
 
+(defn escape-strings
+  "Escape any illegal XML strings"
+  [tree]
+  (walk/postwalk
+   #(if (and (map? %) (contains? % :content))
+      (assoc % :content (seq (for [e (:content %)]
+                               (if (string? e)
+                                 (StringEscapeUtils/escapeXml11 e)
+                                 e))))
+      %)
+   tree))
+
 (defn emit-xml
   "Generate an XML string from a zipper using clojure.xml"
   [loc]
-  (-> (with-out-str (-> loc zip/root xml/emit))
+  (-> (with-out-str (-> loc zip/root escape-strings xml/emit))
       (str/replace #"^.*\n" "")
       (str/replace #"(\r?\n|\r)" "")))
 
@@ -186,7 +200,7 @@
   x)
 
 (defn expand-xml-str
-  "Replace any series a chart that references a sheet that's being cloned to point to all
+  "Replace any series in a chart that references a sheet that's being cloned to point to all
    the clones. "
   [sheet src-sheet dst-sheets xml-str]
   (->> xml-str

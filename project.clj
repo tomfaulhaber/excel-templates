@@ -3,7 +3,8 @@
   :url "https://github.com/tomfaulhaber/excel-templates"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.apache.poi/poi-ooxml "3.10-FINAL"]
+  :dependencies [[org.apache.commons/commons-lang3 "3.4"]
+                 [org.apache.poi/poi-ooxml "3.10-FINAL"]
                  [org.apache.poi/ooxml-schemas "1.1"]
                  [org.clojure/data.zip "0.1.1" :exclusions [[org.clojure/clojure]]]
                  [joda-time "2.7"]]
