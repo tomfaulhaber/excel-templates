@@ -205,7 +205,7 @@ Christophe Grand's [enlive][enlive] library was the direct inspiration for this 
 
 ## License
 
-Copyright © 2014-5 Tom Faulhaber
+Copyright © 2014-6 Tom Faulhaber
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
