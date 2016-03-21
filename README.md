@@ -7,6 +7,10 @@ Excel templates is designed to build Excel spreadsheets by combining two parts:
 1. A Excel file that works as a template defining layout and formatting information for the spreadsheet you're creating
 2. A Clojure data in the form of maps and seqs that defines the contents to be inserted in the resulting spreadsheet.
 
+To see it in action, watch _Creating Beautiful Spreadsheets With Data and Templates_, a talk I gave at Clojure/West in 2015:
+
+[![Video for Creating Beautiful Spreadsheets With Data and Templates](http://img.youtube.com/vi/qnJs79W0BDo/0.jpg)](http://www.youtube.com/watch?v=qnJs79W0BDo)
+
 I wrote a post on the [Infolace blog](http://www.infolace.com/blog/2015/02/10/generating-beautiful-excel-reports-with-templates/) about the motivation and construction of this project.
 
 There is also an [example project](https://github.com/tomfaulhaber/excel-templates-example) that shows how to use `excel-templates`.
@@ -29,7 +33,7 @@ If you are using Maven, add the following repository definition to your `pom.xml
 With Leiningen:
 
 ``` clj
-[com.infolace/excel-templates "0.3.1"]
+[com.infolace/excel-templates "0.3.2"]
 ```
 
 With Maven:
@@ -38,7 +42,7 @@ With Maven:
 <dependency>
   <groupId>com.infolace</groupId>
   <artifactId>excel-templates</artifactId>
-  <version>0.3.1</version>
+  <version>0.3.2</version>
 </dependency>
 ```
 
