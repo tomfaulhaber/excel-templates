@@ -33,7 +33,7 @@ If you are using Maven, add the following repository definition to your `pom.xml
 With Leiningen:
 
 ``` clj
-[com.infolace/excel-templates "0.3.2"]
+[com.infolace/excel-templates "0.3.3"]
 ```
 
 With Maven:
@@ -42,7 +42,7 @@ With Maven:
 <dependency>
   <groupId>com.infolace</groupId>
   <artifactId>excel-templates</artifactId>
-  <version>0.3.2</version>
+  <version>0.3.3</version>
 </dependency>
 ```
 
