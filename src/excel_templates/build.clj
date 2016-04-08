@@ -177,7 +177,7 @@ If there are any nil values in the source collection, the corresponding cells ar
   [template-file]
   (let [f (io/file template-file)]
     (if (.exists f)
-      f
+      (io/input-stream f)
       (-> template-file io/resource io/input-stream))))
 
 
