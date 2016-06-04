@@ -185,7 +185,7 @@ If there are any nil values in the source collection, the corresponding cells ar
   "Build an output file with all the rows stripped out.
    This keeps all the styles and annotations while letting us write the
    spreadsheet using streaming so it can be arbitrarily large"
-  [template-file output-file]
+  [template-file output-file unused]
   (let [tmpfile (create-temp-xlsx-file "excel-template")]
     (try
       (io/copy template-file tmpfile)
@@ -193,10 +193,13 @@ If there are any nil values in the source collection, the corresponding cells ar
         (let [wb (XSSFWorkbook. pkg)]
           (doseq [sheet-num (range (.getNumberOfSheets wb))]
             (let [sheet (.getSheetAt wb sheet-num)
-                  nrows (inc (.getLastRowNum sheet))]
+                  nrows (inc (.getLastRowNum sheet))
+                  veryHidden 2]
               (doseq [row-num (reverse (range nrows))]
                 (when-let [row (.getRow sheet row-num)]
-                  (.removeRow sheet row)))))
+                  (.removeRow sheet row)))
+              (if (= :hide unused)
+                (.setSheetHidden wb sheet-num veryHidden))))
           ;; Write the resulting output Workbook
           (with-open [fos (FileOutputStream. output-file)]
             (.write wb fos))))
@@ -484,7 +487,7 @@ If there are any nil values in the source collection, the corresponding cells ar
 
 (defn render-to-file
   "Build a report based on a spreadsheet template"
-  [template-file output-file replacements]
+  [template-file output-file replacements & {:keys [unused] :or {unused :leave}}]
   (let [tmpfile (File/createTempFile "excel-output" ".xlsx")
         tmpcopy0 (File/createTempFile "excel-template-firstcopy" ".xlsx")
         tmpcopy (File/createTempFile "excel-template-copy" ".xlsx")
@@ -498,7 +501,7 @@ If there are any nil values in the source collection, the corresponding cells ar
       (let [chart-data (charts-from-file tmpcopy0)]
         (filter-zip-file tmpcopy0 tmpcopy (c/chart-removal-rules chart-data))
         (create-missing-sheets! tmpcopy replacements chart-data))
-      (build-base-output tmpcopy tmpfile)
+      (build-base-output tmpcopy tmpfile unused)
       (let [replacements (replacements-by-sheet-name replacements)
             translation-table (fo/build-translation-tables replacements)
             replacements (expand-replacements replacements)]
@@ -524,6 +527,9 @@ If there are any nil values in the source collection, the corresponding cells ar
                         wb (if src-has-formula? wb (SXSSFWorkbook. wb))]
                     (try
                       (let [sheet (.getSheetAt wb sheet-num)]
+                        (if (and (= unused :hide)
+                                 (seq sheet-data))
+                          (.setSheetHidden wb sheet-num 0))  ; unhidden
                         ;; loop through the rows of the template, copying
                         ;; from the template or injecting data rows as
                         ;; appropriate
@@ -588,4 +594,10 @@ If there are any nil values in the source collection, the corresponding cells ar
                output-file "/tmp/bar.xlsx"
                data {"Sheet1" {2 [[nil "old!"]]}}]
            (render-to-file template-file output-file data)
+           (sh "libreoffice" "--calc" output-file))
+
+         (let [template-file "foo.xlsx"
+               output-file "/tmp/bar.xlsx"
+               data {"Sheet1" {2 [[nil "old!"]]}}]
+           (render-to-file template-file output-file data :unused :hide)
            (sh "libreoffice" "--calc" output-file)))
